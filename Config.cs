@@ -73,7 +73,7 @@ namespace LogShippingService
         {
             
             var json = File.ReadAllText(configFile);
-            dynamic jsonObj = JsonConvert.DeserializeObject(json);
+            dynamic jsonObj = JsonConvert.DeserializeObject(json) ?? throw new InvalidOperationException();
 
             jsonObj[section][key] = value;
 
