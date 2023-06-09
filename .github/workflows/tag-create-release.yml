@@ -1,0 +1,41 @@
+name: SQL Log Shipping Service - Tag & Create Release
+
+on: 
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: 6.0.x
+
+      - name: Build
+        run: dotnet build LogShippingService.csproj -p:Configuration=Release -o Build
+
+      - name: Get Version
+        id: GetVersion 
+        shell: powershell
+        run: | 
+          $path = [System.IO.Path]::Combine((Get-Location),"Build\LogShippingService.dll")
+          $version = [System.Reflection.Assembly]::LoadFrom($path).GetName().Version
+          $version.ToString(3)
+          Write-Output "BUILD_NUMBER=$($version.ToString(3))" >> $env:GITHUB_OUTPUT
+
+      - name: Zip
+        shell: powershell
+        run: | 
+          $zipPath = "LogShippingService_${{steps.GetVersion.outputs.BUILD_NUMBER}}.zip"
+          Compress-Archive -Path "Build\*" -DestinationPath $zipPath
+
+      - name: Publish - GitHub CLI
+        run: gh release create ${{steps.GetVersion.outputs.BUILD_NUMBER}} "LogShippingService_${{steps.GetVersion.outputs.BUILD_NUMBER}}.zip" --generate-notes --draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
