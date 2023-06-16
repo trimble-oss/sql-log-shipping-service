@@ -137,7 +137,8 @@ namespace LogShippingTest
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
             foreach (var url in logFiles)
             {
-                var sql = $"RESTORE LOG {db.SqlQuote()} FROM URL = {(Config.ContainerURL + "/" + url).SqlSingleQuote()} WITH NORECOVERY";
+                var file = (Config.ContainerURL + "/" + url).SqlSingleQuote();
+                var sql = $"RESTORE LOG {db.SqlQuote()} FROM URL = {file} WITH NORECOVERY";
                 using (var op = Operation.Begin(sql))
                 {
                     try
@@ -150,9 +151,16 @@ namespace LogShippingTest
                     {
                         op.SetException(ex);
                     }
+                    catch (SqlException ex) when
+                        (ex.Number == 3203) // Read error.  Damaged backup? Log error and continue processing.
+                    {
+                        Log.Error(ex,"Error reading backup file {file} - possible damaged or incomplete backup.  Processing will continue with next file.",file);
+                        op.SetException(ex);
+                    }
                     catch (SqlException ex) when (ex.Number == 4319)
                     {
-                        Log.Warning(ex,"A previous restore operation was interrupted.  Attempting to fix automatically with RESTART option");
+                        Log.Warning(ex,
+                            "A previous restore operation was interrupted for {db}.  Attempting to fix automatically with RESTART option",db);
                         sql += ",RESTART";
                         Execute(sql);
                         op.Complete();
