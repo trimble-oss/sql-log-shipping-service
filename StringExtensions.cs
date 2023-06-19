@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace LogShippingTest
+﻿namespace LogShippingService
 {
     internal static class StringExtensions
     {
@@ -20,7 +14,7 @@ namespace LogShippingTest
 
         public static string RemovePrefix(this string str, string prefix)
         {
-            return str.StartsWith(prefix) ? str.Substring(prefix.Length) : str;
+            return str.StartsWith(prefix) ? str[prefix.Length..] : str;
         }
 
     }

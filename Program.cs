@@ -1,18 +1,13 @@
-﻿using System;
-using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
-using LogShippingTest;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Serilog;
-using SerilogTimings;
 using Topshelf;
 
-namespace ListFilesFromAzureBlob
+namespace LogShippingService
 {
     class Program
     {
         
-        static void Main(string[] args)
+        static void Main()
         {
             Directory.SetCurrentDirectory(AppContext.BaseDirectory);
             var configuration = new ConfigurationBuilder()
@@ -24,11 +19,11 @@ namespace ListFilesFromAzureBlob
                 .ReadFrom.Configuration(configuration)
                 .CreateLogger();
 
-            var rc = HostFactory.Run(x =>
+            HostFactory.Run(x =>
             {
                 x.Service<LogShipping>(s =>
                 {
-                    s.ConstructUsing(name => new LogShipping());
+                    s.ConstructUsing(_ => new LogShipping());
                     s.WhenStarted(tc => tc.Start());
                     s.WhenStopped(tc => tc.Stop());
                 });
