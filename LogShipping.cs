@@ -1,30 +1,16 @@
-﻿using Azure.Storage.Blobs.Models;
+﻿using System.Data;
 using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Microsoft.Data.SqlClient;
-using Microsoft.Extensions.Configuration;
-using System;
-using System.Collections.Generic;
-using System.Data;
-using System.Diagnostics.CodeAnalysis;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using LogShippingService;
 using Serilog;
 using SerilogTimings;
-using Topshelf;
 
-namespace LogShippingTest
+namespace LogShippingService
 {
     internal class LogShipping
     {
 
-        private bool isStopRequested;
-
-        public LogShipping()
-        {
-
-        }
+        private bool _isStopRequested;
 
         public void Start()
         {
@@ -34,7 +20,7 @@ namespace LogShippingTest
         private void StartProcessing()
         {
             long i = 1;
-            while (!isStopRequested)
+            while (!_isStopRequested)
             {
                 Log.Information("Starting iteration {0}",i);
                 try
@@ -49,7 +35,7 @@ namespace LogShippingTest
                 var nextIterationStart = DateTime.Now.AddMilliseconds(Config.IterationDelayMs);
                 Log.Information(
                     $"Iteration {i} Completed.  Next iteration will start at {nextIterationStart}");
-                while (DateTime.Now < nextIterationStart && !isStopRequested)
+                while (DateTime.Now < nextIterationStart && !_isStopRequested)
                 {
                     Thread.Sleep(100);
                 }
@@ -61,20 +47,20 @@ namespace LogShippingTest
         public void Stop()
         {
             Log.Information("Initiating shutdown...");
-            isStopRequested=true;
+            _isStopRequested=true;
         }
 
         private void Process()
         {
             DataTable dt;
-            using (var op = Operation.Time("GetDatabases"))
+            using (Operation.Time("GetDatabases"))
             {
                 dt = GetDatabases();
             }
 
             Parallel.ForEach(dt.AsEnumerable(), new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads }, row =>
             {
-                if (!isStopRequested)
+                if (!_isStopRequested)
                 {
                     var db = (string)row["Name"];
                     DateTime fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
@@ -86,9 +72,7 @@ namespace LogShippingTest
 
         private void ProcessDatabase(string db, DateTime fromDate,int processCount=1)
         {
-            List<string> logFiles;
-
-            logFiles = GetFilesForDb(db, fromDate);
+            var logFiles = GetFilesForDb(db, fromDate);
        
             using (var op = Operation.Begin("Restore Logs for {DB}", db))
             {
@@ -170,7 +154,7 @@ namespace LogShippingTest
                     throw new TimeoutException("Max processing time exceeded");
                 }
 
-                if (isStopRequested)
+                if (_isStopRequested)
                 {
                     Log.Information("Halt log restores for {db} due to stop request",db);
                     break;

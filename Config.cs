@@ -1,14 +1,7 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
 using Serilog;
-using System;
-using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
-using System.Linq;
-using System.Linq.Expressions;
-using System.Text;
-using System.Threading.Tasks;
-using System.Xml;
 
 namespace LogShippingService
 {
@@ -24,7 +17,7 @@ namespace LogShippingService
         public static readonly int OffSetMins;
         public static readonly int MaxProcessingTimeMins;
         public static readonly string DatabaseToken="{DatabaseName}";
-        private static readonly string configFile = "appsettings.json";
+        private const string ConfigFile = "appsettings.json";
 
         static Config()
         {
@@ -32,7 +25,7 @@ namespace LogShippingService
             {
                 var configuration = new ConfigurationBuilder()
                     .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
-                    .AddJsonFile(configFile)
+                    .AddJsonFile(ConfigFile)
                     .Build();
 
                 // Read values from the configuration
@@ -52,20 +45,20 @@ namespace LogShippingService
                 {
                     var message = "SASToken is required with ContainerUrl";
                     Log.Error(message);
-                    throw new ArgumentException(message,"SASToken");
+                    throw new ArgumentException(message);
                 }
 
                 ConnectionString = configuration["Config:Destination"] ?? throw new InvalidOperationException();
-                MaxThreads = Int32.Parse(configuration["Config:MaxThreads"] ?? throw new InvalidOperationException());
+                MaxThreads = int.Parse(configuration["Config:MaxThreads"] ?? throw new InvalidOperationException());
                 LogFilePathTemplate = configuration["Config:LogFilePath"] ?? throw new InvalidOperationException();
                 if (!LogFilePathTemplate.Contains(DatabaseToken))
                 {
                     throw new ValidationException($"LogFilePathTemplate should contain '{DatabaseToken}'");
                 }
-                IterationDelayMs = Int32.Parse(configuration["Config:DelayBetweenIterationsMs"] ??
+                IterationDelayMs = int.Parse(configuration["Config:DelayBetweenIterationsMs"] ??
                                                throw new InvalidOperationException());
-                OffSetMins = Int32.Parse(configuration["Config:OffsetMins"] ?? throw new InvalidOperationException());
-                MaxProcessingTimeMins = Int32.Parse(configuration["Config:MaxProcessingTimeMins"] ??
+                OffSetMins = int.Parse(configuration["Config:OffsetMins"] ?? throw new InvalidOperationException());
+                MaxProcessingTimeMins = int.Parse(configuration["Config:MaxProcessingTimeMins"] ??
                                                     throw new InvalidOperationException());
             }
             catch (Exception ex)
@@ -79,13 +72,13 @@ namespace LogShippingService
         private static void Update(string section,string key, string value)
         {
             
-            var json = File.ReadAllText(configFile);
+            var json = File.ReadAllText(ConfigFile);
             dynamic jsonObj = JsonConvert.DeserializeObject(json) ?? throw new InvalidOperationException();
 
             jsonObj[section][key] = value;
 
-            string output = JsonConvert.SerializeObject(jsonObj, Newtonsoft.Json.Formatting.Indented);
-            File.WriteAllText(configFile, output);
+            string output = JsonConvert.SerializeObject(jsonObj, Formatting.Indented);
+            File.WriteAllText(ConfigFile, output);
         }
     }
 }
