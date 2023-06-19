@@ -1,8 +1,8 @@
-# SQL Log Shipping Service (For Azure blob)
+# SQL Log Shipping Service *(For Azure blob & UNC Paths)*
 
 :warning: Project is in an early stage of development/testing.
 
-This project provides a solution for automatically restoring SQL Server transaction log backups created using BACKUP TO URL to an Azure blob container.  The built-in log shipping solution is designed to work by backing up to a local path and doesn't support using BACKUP TO URL.  The solution also doesn't scale well if you have a large number of databases as it creates SQL agent jobs per database.  If you have 1000 databases you don't want to have 1000 log backup or restore jobs executing simultaneously.  A single job might also be insufficient if you have a large number of databases.
+This project provides a solution for automatically restoring SQL Server transaction log backups created using BACKUP TO URL to an Azure blob container.  The built-in log shipping solution is designed to work by backing up to a local path and doesn't support using BACKUP TO URL.  The solution also doesn't scale well if you have a large number of databases as it creates SQL Agent jobs per database.  If you have 1000 databases you don't want to have 1000 log backup or restore jobs executing simultaneously.  A single job might also be insufficient if you have a large number of databases.
 
 [Ola'Hallegren's](https://ola.hallengren.com/) maintenance solution is a popular option for managing SQL Server backups.  It supports backup to URL and the **@DatabasesInParallel** option to allow you to use multiple jobs if a single job isn't sufficient.  Ola's backup solution has [good documentation](https://ola.hallengren.com/sql-server-backup.html) and [this gist](https://gist.github.com/scheffler/7edd40f430235aab651fadcc7d191a89) is also useful to help you get started with BACKUP TO URL.
 
@@ -13,8 +13,9 @@ This log shipping service provides a solution for restoring the log backups dire
 * Extract the application binary files
 * Create appsettings.json.
 
-The log shipping service runs as a Windows service.  Configure the service using the "appsettings.json" configuration file.  There is an example config provided "appsettings.json.example" that you can use as a starting point.  You should review and edit the entries in the "Config" section of the file.
+The log shipping service runs as a Windows service.  Configure the service using the "appsettings.json" configuration file.  There is an example config provided [appsettings.json.azure.example](appsettings.json.azure.example) or [appsettings.json.unc.example](appsettings.json.unc.example) that you can use as a starting point.  You should review and edit the entries in the "Config" section of the file.
 
+**Azure**
 ```json
   "Config": {
     "ContainerUrl": "https://your_storage_account.blob.core.windows.net/uour_container_name",
@@ -27,6 +28,19 @@ The log shipping service runs as a Windows service.  Configure the service using
     "MaxProcessingTimeMins":  60
   }
   ```
+
+**UNC Path or directory**
+```json
+  "Config": {
+    "LogFilePath": "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\LOG",
+    "MaxThreads": 10,
+    "Destination": "Data Source=LOCALHOST;Integrated Security=True;Encrypt=True;Trust Server Certificate=True",
+    "DelayBetweenIterationsMs": 10000,
+    "OffsetMins": 0,
+    "MaxProcessingTimeMins":  60
+  }
+  ```
+:warning: For UNC paths, the backslash character needs to be encoded.  "\\" becomes "\\\\".  A double backslash "\\\\" becomes "\\\\\\\\".
 
 The SASToken value will be encrypted with the machine key when the service starts.  It's recommended to use Windows authentication for the "Destination" connection string.
 
@@ -62,7 +76,6 @@ Once the service has looped through all the databases, it will start the next it
 
 ## Limitations
 
-* This service currently only works with backups in Azure blob
 * The service doesn't handle the initial restore of the full backup from the primary.  
 dbatools could be used for this purpose.  e.g.
 
