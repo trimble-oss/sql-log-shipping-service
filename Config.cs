@@ -18,6 +18,9 @@ namespace LogShippingService
         public static readonly int MaxProcessingTimeMins;
         public static readonly string DatabaseToken="{DatabaseName}";
         private const string ConfigFile = "appsettings.json";
+        public static readonly string? StandbyFileName;
+        public static bool KillUserConnections;
+        public static int KillUserConnectionsWithRollBackAfter;
 
         static Config()
         {
@@ -31,6 +34,9 @@ namespace LogShippingService
                 // Read values from the configuration
                 ContainerURL = configuration["Config:ContainerUrl"];
                 SASToken = configuration["Config:SASToken"];
+                StandbyFileName = configuration["Config:StandbyFileName"];
+                KillUserConnections = bool.Parse(configuration["Config:KillUserConnections"] ?? true.ToString());
+                KillUserConnectionsWithRollBackAfter = int.Parse(configuration["Config:KillUserConnectionsWithRollbackAfter"] ?? 60.ToString());
                 if (!string.IsNullOrEmpty(SASToken) && !EncryptionHelper.IsEncrypted(SASToken))
                 {
                     Log.Information("Encrypting SAS Token");
@@ -40,12 +46,17 @@ namespace LogShippingService
                 {
                     SASToken = EncryptionHelper.DecryptWithMachineKey(SASToken);
                 }
-
+                
                 if (!string.IsNullOrEmpty(ConnectionString) && string.IsNullOrEmpty(SASToken))
                 {
                     var message = "SASToken is required with ContainerUrl";
                     Log.Error(message);
                     throw new ArgumentException(message);
+                }
+                if(!string.IsNullOrEmpty(StandbyFileName) && (!Config.StandbyFileName.Contains(DatabaseToken)))
+                {
+                    Log.Error("Missing {DatabaseToken} from StandbyFileName",DatabaseToken);
+                    throw new ArgumentException($"Missing {DatabaseToken} from StandbyFileName");
                 }
 
                 ConnectionString = configuration["Config:Destination"] ?? throw new InvalidOperationException();
