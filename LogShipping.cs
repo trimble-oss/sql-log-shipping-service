@@ -121,33 +121,43 @@ namespace LogShippingService
                 var file = logPath.SqlSingleQuote();
                 var urlOrDisk = string.IsNullOrEmpty(Config.ContainerURL) ? "DISK" : "URL";
                 var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY";
-                using (var op = Operation.Begin(sql))
+          
+                try
                 {
+                    Execute(sql);
+                }
+                catch (SqlException ex) when
+                    (ex.Number == 4326) // Log file is too early to apply, Log error and continue
+                {
+                    Log.Warning(ex,"Log file is too early to apply. Processing will continue with next file.");
+                }
+                catch (SqlException ex) when
+                    (ex.Number == 3203) // Read error.  Damaged backup? Log error and continue processing.
+                {
+                    Log.Error(ex,"Error reading backup file {file} - possible damaged or incomplete backup.  Processing will continue with next file.",file);
+                }
+                catch (SqlException ex) when
+                    (ex.Number == 3101) // Exclusive access could not be obtained because the database is in use.  Kill user connections and retry.
+                {
+                    if (!KillUserConnections(db)) return;
+                    Execute(sql);
+                }
+                catch (SqlException ex) when (ex.Number == 4319)
+                {
+                    Log.Warning(ex,
+                        "A previous restore operation was interrupted for {db}.  Attempting to fix automatically with RESTART option",db);
+                    sql += ",RESTART";
                     try
                     {
                         Execute(sql);
-                        op.Complete();
                     }
-                    catch (SqlException ex) when
-                        (ex.Number == 4326) // Log file is too early to apply, Log error and continue
+                    catch (Exception ex2)
                     {
-                        op.SetException(ex);
+                        Log.Error(ex2,"Error running RESTORE with RESTART option. {sql}. Skipping file and trying next in sequence.",sql);
                     }
-                    catch (SqlException ex) when
-                        (ex.Number == 3203) // Read error.  Damaged backup? Log error and continue processing.
-                    {
-                        Log.Error(ex,"Error reading backup file {file} - possible damaged or incomplete backup.  Processing will continue with next file.",file);
-                        op.SetException(ex);
-                    }
-                    catch (SqlException ex) when (ex.Number == 4319)
-                    {
-                        Log.Warning(ex,
-                            "A previous restore operation was interrupted for {db}.  Attempting to fix automatically with RESTART option",db);
-                        sql += ",RESTART";
-                        Execute(sql);
-                        op.Complete();
-                    }
+
                 }
+                
                 if (DateTime.Now > maxTime) 
                 {
                     // Stop processing logs if max processing time is exceeded. Prevents a single DB that has fallen behind from impacting other DBs
@@ -160,14 +170,59 @@ namespace LogShippingService
                     break;
                 }
             }
+            RestoreWithStandby(db);
+        }
+
+        private static bool KillUserConnections(string db)
+        {
+            if (Config.KillUserConnections)
+            {
+                var sql = $"ALTER DATABASE {db.SqlQuote()} SET SINGLE_USER WITH ROLLBACK AFTER {Config.KillUserConnectionsWithRollBackAfter}";
+                Log.Warning("User connections to {db} are preventing restore operations.  Sessions will be killed after {seconds}. {sql}", db, Config.KillUserConnectionsWithRollBackAfter, sql);
+                try
+                {
+                    Execute(sql);
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex,"Error killing user connections for {db}. {sql}",db,sql);
+                    return false;
+                }
+            }
+            else
+            {
+                Log.Error("User connections to {db} are preventing restore operations. Consider enabling KillUserConnections in config");
+                return false;
+            }
+        }
+
+        private static void RestoreWithStandby(string db)
+        {
+            if (string.IsNullOrEmpty(Config.StandbyFileName)) return;
+            var standby = Config.StandbyFileName.Replace(Config.DatabaseToken,db);
+            var sql = $"IF DATABASEPROPERTYEX({db.SqlSingleQuote()},'IsInStandBy') = 0 RESTORE DATABASE {db.SqlQuote()} WITH STANDBY = {standby.SqlSingleQuote()}";
+            try
+            {
+                Execute(sql);
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex,"Error running {sql}",sql);
+            }
+ 
         }
 
         private static void Execute(string sql)
         {
-            using var cn = new SqlConnection(Config.ConnectionString);
-            using var cmd = new SqlCommand(sql, cn) {CommandTimeout = 0};
-            cn.Open();
-            cmd.ExecuteNonQuery();
+            using (var op = Operation.Begin(sql))
+            {
+                using var cn = new SqlConnection(Config.ConnectionString);
+                using var cmd = new SqlCommand(sql, cn) { CommandTimeout = 0 };
+                cn.Open();
+                cmd.ExecuteNonQuery();
+                op.Complete();
+            }
         }
 
         public static DataTable GetDatabases()
