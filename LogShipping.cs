@@ -87,12 +87,9 @@ namespace LogShippingTest
         private void ProcessDatabase(string db, DateTime fromDate,int processCount=1)
         {
             List<string> logFiles;
-            var prefix = Config.LogFilePathTemplate.Replace(Config.DatabaseToken, db);
-            using (var op = Operation.Begin("Query Azure Blob for {DB} after {date} (Offset:{offset}):{prefix}", db, fromDate, Config.OffSetMins, prefix))
-            {
-                logFiles = GetFilesForDb(prefix, fromDate);
-                op.Complete("FileCount", logFiles.Count);
-            }
+
+            logFiles = GetFilesForDb(db, fromDate);
+       
             using (var op = Operation.Begin("Restore Logs for {DB}", db))
             {
                 try
@@ -135,10 +132,11 @@ namespace LogShippingTest
         private void RestoreLogs(List<string> logFiles,string db)
         {
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
-            foreach (var url in logFiles)
+            foreach (var logPath in logFiles)
             {
-                var file = (Config.ContainerURL + "/" + url).SqlSingleQuote();
-                var sql = $"RESTORE LOG {db.SqlQuote()} FROM URL = {file} WITH NORECOVERY";
+                var file = logPath.SqlSingleQuote();
+                var urlOrDisk = string.IsNullOrEmpty(Config.ContainerURL) ? "DISK" : "URL";
+                var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY";
                 using (var op = Operation.Begin(sql))
                 {
                     try
@@ -188,7 +186,7 @@ namespace LogShippingTest
             cmd.ExecuteNonQuery();
         }
 
-        public DataTable GetDatabases()
+        public static DataTable GetDatabases()
         {
             using var cn = new SqlConnection(Config.ConnectionString);
             using var cmd = new SqlCommand(SqlStrings.GetDatabases,cn) {CommandTimeout = 0};
@@ -198,16 +196,51 @@ namespace LogShippingTest
             return dt;
         }
 
-        private List<string> GetFilesForDb(string prefix, DateTime fromDate)
+        private static List<string> GetFilesForDb(string db, DateTime fromDate)
         {
-            Uri containerUri = new Uri(Config.ContainerURL + Config.SASToken);
-            BlobContainerClient containerClient = new BlobContainerClient(containerUri);
+            var path = Config.LogFilePathTemplate.Replace(Config.DatabaseToken, db);
+            List<string> logFiles;
+            if (string.IsNullOrEmpty(Config.ContainerURL))
+            {
+                using (var op = Operation.Begin("Get logs for {DB} after {date} (Offset:{offset}) from {path}", db,
+                           fromDate, Config.OffSetMins, path))
+                {
+                    logFiles = GetFilesForDbUnc(path, fromDate);
+                    op.Complete("FileCount", logFiles.Count);
+                }
+            }
+            else
+            {
+                using (var op = Operation.Begin("Query Azure Blob for {DB} after {date} (Offset:{offset}):{prefix}", db, fromDate, Config.OffSetMins, path))
+                {
+                    logFiles = GetFilesForDbAzBlob(path, fromDate);
+                    op.Complete("FileCount", logFiles.Count);
+                }
+            }
+            return logFiles;
+        }
 
-            List<string> filteredBlobs = containerClient
+        private static List<string> GetFilesForDbUnc(string path, DateTime fromDate)
+        {
+            var files = new DirectoryInfo(path)
+                .GetFiles("*.trn", SearchOption.AllDirectories)  
+                .Where(file => file.LastWriteTime > fromDate)  
+                .Select(file => file.FullName)  
+                .ToList();  
+
+            return files;
+        }
+
+        private static List<string> GetFilesForDbAzBlob(string prefix, DateTime fromDate)
+        {
+            var containerUri = new Uri(Config.ContainerURL + Config.SASToken);
+            var containerClient = new BlobContainerClient(containerUri);
+
+            var filteredBlobs = containerClient
                 .GetBlobs(BlobTraits.Metadata, BlobStates.None, prefix)
                 .Where(blobItem => blobItem.Properties.LastModified > fromDate)
                 .OrderBy(blobItem => blobItem.Properties.LastModified)
-                .Select(blobItem => blobItem.Name)
+                .Select(blobItem => Config.ContainerURL + "/" + blobItem.Name)
                 .ToList();
 
             return filteredBlobs;

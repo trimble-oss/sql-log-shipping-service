@@ -15,8 +15,8 @@ namespace LogShippingService
     internal static class Config
     {
 
-        public static readonly string ContainerURL;
-        public static readonly string SASToken;
+        public static readonly string? ContainerURL;
+        public static readonly string? SASToken;
         public static readonly string ConnectionString;
         public static readonly int MaxThreads;
         public static readonly string LogFilePathTemplate;
@@ -36,9 +36,9 @@ namespace LogShippingService
                     .Build();
 
                 // Read values from the configuration
-                ContainerURL = configuration["Config:ContainerUrl"] ?? throw new InvalidOperationException();
-                SASToken = configuration["Config:SASToken"] ?? throw new InvalidOperationException();
-                if (!EncryptionHelper.IsEncrypted(SASToken))
+                ContainerURL = configuration["Config:ContainerUrl"];
+                SASToken = configuration["Config:SASToken"];
+                if (!string.IsNullOrEmpty(SASToken) && !EncryptionHelper.IsEncrypted(SASToken))
                 {
                     Log.Information("Encrypting SAS Token");
                     Config.Update("Config", "SASToken", EncryptionHelper.EncryptWithMachineKey(SASToken));
@@ -46,6 +46,13 @@ namespace LogShippingService
                 else
                 {
                     SASToken = EncryptionHelper.DecryptWithMachineKey(SASToken);
+                }
+
+                if (!string.IsNullOrEmpty(ConnectionString) && string.IsNullOrEmpty(SASToken))
+                {
+                    var message = "SASToken is required with ContainerUrl";
+                    Log.Error(message);
+                    throw new ArgumentException(message,"SASToken");
                 }
 
                 ConnectionString = configuration["Config:Destination"] ?? throw new InvalidOperationException();

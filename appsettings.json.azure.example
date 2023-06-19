@@ -1,0 +1,38 @@
+﻿{
+  "Config": {
+    "ContainerUrl": "https://your_storage_account.blob.core.windows.net/uour_container_name",
+    "SASToken": "?sp=...",
+    "LogFilePath": "LOG/SERVERNAME/{DatabaseName}/",
+    "MaxThreads": 10,
+    "Destination": "Data Source=LOCALHOST;Integrated Security=True;Encrypt=True;Trust Server Certificate=True",
+    "DelayBetweenIterationsMs": 10000,
+    "OffsetMins": 0, 
+    "MaxProcessingTimeMins":  60
+  },
+  "Serilog": {
+    "Using": [ "Serilog.Sinks.Console", "Serilog.Sinks.File" ],
+    "MinimumLevel": "Debug",
+    "WriteTo": [
+      {
+        "Name": "Console",
+        "Args": {
+          "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj} <{ThreadId}>{NewLine}{Exception}"
+        }
+      },
+      {
+        "Name": "File",
+        "Args": {
+          "path": "Logs/log-.txt",
+          "rollingInterval": "Hour",
+          "retainedFileCountLimit": 24,
+          "outputTemplate": "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj} <{ThreadId}>{NewLine}{Exception}"
+        }
+      }
+    ],
+    "Enrich": [ "FromLogContext", "WithMachineName", "WithThreadId" ],
+    "Properties": {
+      "Application": "LogShippingService"
+    }
+  }
+
+}
