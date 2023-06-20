@@ -22,6 +22,7 @@ namespace LogShippingService
             long i = 1;
             while (!_isStopRequested)
             {
+                WaitUntilActiveHours();
                 Log.Information("Starting iteration {0}",i);
                 try
                 {
@@ -44,6 +45,21 @@ namespace LogShippingService
             Log.Information("Shutdown complete.");
         }
 
+        private static void WaitUntilActiveHours()
+        {
+            while (!CanRestoreLogsNow)
+            {
+                var now = DateTime.Now;
+                var nextHour = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(1);
+                var delay = Convert.ToInt32((nextHour - now).TotalMilliseconds);
+                if (CanRestoreLogsNow) return;
+                Log.Debug("Waiting for active hours to run {Hours}", Config.Hours);
+                Thread.Sleep(delay);
+            }
+        }
+
+        public static bool CanRestoreLogsNow=> Config.Hours.Contains(DateTime.Now.Hour);
+
         public void Stop()
         {
             Log.Information("Initiating shutdown...");
@@ -60,7 +76,7 @@ namespace LogShippingService
 
             Parallel.ForEach(dt.AsEnumerable(), new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads }, row =>
             {
-                if (!_isStopRequested)
+                if (!_isStopRequested && CanRestoreLogsNow)
                 {
                     var db = (string)row["Name"];
                     DateTime fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
@@ -167,6 +183,12 @@ namespace LogShippingService
                 if (_isStopRequested)
                 {
                     Log.Information("Halt log restores for {db} due to stop request",db);
+                    break;
+                }
+
+                if (!CanRestoreLogsNow)
+                {
+                    Log.Information("Halt log restores for {db} due to Hours configuration", db);
                     break;
                 }
             }
