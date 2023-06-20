@@ -22,6 +22,8 @@ namespace LogShippingService
         public static bool KillUserConnections;
         public static int KillUserConnectionsWithRollBackAfter;
         public static List<int> Hours;
+        public static List<string> IncludedDatabases;
+        public static List<string> ExcludedDatabases;
 
         static Config()
         {
@@ -38,6 +40,10 @@ namespace LogShippingService
                 StandbyFileName = configuration["Config:StandbyFileName"];
                 KillUserConnections = bool.Parse(configuration["Config:KillUserConnections"] ?? true.ToString());
                 KillUserConnectionsWithRollBackAfter = int.Parse(configuration["Config:KillUserConnectionsWithRollbackAfter"] ?? 60.ToString());
+                IncludedDatabases = configuration.GetSection("Config:IncludedDatabases").Get<List<string>>() ?? new List<string>();
+                ExcludedDatabases = configuration.GetSection("Config:ExcludedDatabases").Get<List<string>>() ?? new List<string>();
+                Log.Information("Included {IncludedDBs}", IncludedDatabases);
+                Log.Information("Excluded {ExcludedDBs}", ExcludedDatabases);
                 Hours = configuration.GetSection("Config:Hours").Get<List<int>>() ?? new List<int>
                 {
                     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,

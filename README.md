@@ -79,6 +79,26 @@ If users are able to query the log shipped databases, their connections can prev
   }
 ```
 
+## Include/Exclude Databases
+
+Databases on the destination server are automatically included if they have **FULL** or **BULK LOGGED** recovery model and they are in a **RESTORING** or **STANDBY** state.  You can also explicitly include or exclude databases in the config.
+
+Only log ship DB1, DB2, DB3 and DB4:
+
+```json
+  "Config": {
+      "IncludedDatabases": ["DB1", "DB2", "DB3", "DB4"]
+      ...
+```
+
+Log ship everything EXCEPT DB1, DB2, DB3 and DB4.
+
+```json
+  "Config": {
+      "ExcludedDatabases": ["DB1", "DB2", "DB3", "DB4"]
+      ...
+```
+
 ## Uninstall
 
 `LogShippingService.exe uninstall`
