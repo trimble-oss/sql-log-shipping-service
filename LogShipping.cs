@@ -11,6 +11,7 @@ namespace LogShippingService
     {
 
         private bool _isStopRequested;
+        private bool _isShutdown;
 
         public void Start()
         {
@@ -43,6 +44,7 @@ namespace LogShippingService
                 i++;
             }
             Log.Information("Shutdown complete.");
+            _isShutdown = true;
         }
 
         private static void WaitUntilActiveHours()
@@ -53,7 +55,7 @@ namespace LogShippingService
                 var nextHour = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(1);
                 var delay = Convert.ToInt32((nextHour - now).TotalMilliseconds);
                 if (CanRestoreLogsNow) return;
-                Log.Debug("Waiting for active hours to run {Hours}", Config.Hours);
+                Log.Information("Waiting for active hours to run {Hours}", Config.Hours);
                 Thread.Sleep(delay);
             }
         }
@@ -64,6 +66,10 @@ namespace LogShippingService
         {
             Log.Information("Initiating shutdown...");
             _isStopRequested=true;
+            while (!_isShutdown)
+            {
+                System.Threading.Thread.Sleep(100);
+            }
         }
 
         private void Process()
@@ -86,8 +92,21 @@ namespace LogShippingService
             });
         }
 
+        private bool IsIncludedDatabase(string db)
+        {
+            bool isExcluded = Config.ExcludedDatabases.Count > 0 && Config.ExcludedDatabases.Any(e => e.Equals(db, StringComparison.OrdinalIgnoreCase));
+            bool isIncluded = Config.IncludedDatabases.Count == 0 || Config.IncludedDatabases.Any(e => e.Equals(db, StringComparison.OrdinalIgnoreCase));
+
+            return !isExcluded && isIncluded;
+        }
+
         private void ProcessDatabase(string db, DateTime fromDate,int processCount=1)
         {
+            if (!IsIncludedDatabase(db))
+            {
+                Log.Debug("Skipping {db}. Database is excluded.",db);
+                return;
+            }
             var logFiles = GetFilesForDb(db, fromDate);
        
             using (var op = Operation.Begin("Restore Logs for {DB}", db))
