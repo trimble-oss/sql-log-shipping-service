@@ -21,6 +21,7 @@ namespace LogShippingService
         public static readonly string? StandbyFileName;
         public static bool KillUserConnections;
         public static int KillUserConnectionsWithRollBackAfter;
+        public static List<int> Hours;
 
         static Config()
         {
@@ -37,6 +38,15 @@ namespace LogShippingService
                 StandbyFileName = configuration["Config:StandbyFileName"];
                 KillUserConnections = bool.Parse(configuration["Config:KillUserConnections"] ?? true.ToString());
                 KillUserConnectionsWithRollBackAfter = int.Parse(configuration["Config:KillUserConnectionsWithRollbackAfter"] ?? 60.ToString());
+                Hours = configuration.GetSection("Config:Hours").Get<List<int>>() ?? new List<int>
+                {
+                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+                    14, 15, 16, 17, 18, 19, 20, 21, 22, 23
+                };
+                if (Hours.Count != 24)
+                {
+                    Log.Information("Log Restores will run in these hours {hours}", Hours);
+                }
                 if (!string.IsNullOrEmpty(SASToken) && !EncryptionHelper.IsEncrypted(SASToken))
                 {
                     Log.Information("Encrypting SAS Token");

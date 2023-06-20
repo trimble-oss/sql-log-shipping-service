@@ -60,6 +60,25 @@ The $ symbol is added for group managed service accounts and we also just use a 
 
 The "Logs" folder contains a log of what the service is doing.
 
+## Standby
+
+If you want to be able to query the databases, add the **StandbyFileName** to the Config section of **appsettings.json**.  This should be a file path that contains the template **{DatabaseName}** to be replaced with the database name.
+
+You can also adjust the **Hours** to control when database restores take place (Allowing time periods where the database is available for user queries).  The example below will allow the database to be available between 9:00 and 16:59 (Missing 9-16).  The **DelayBetweenIterationsMs** could also be adjusted.
+
+If users are able to query the log shipped databases, their connections can prevent future restore operations.  The default is to KILL user connections after 60 seconds.  This can be adjusted with **KillUserConnections** and **KillUserConnectionsWithRollbackAfter**.
+
+```json
+  "Config": {
+    "StandbyFileName": "D:\\Standby\\{DatabaseName}_Standby.BAK",
+    "Hours": [0, 1, 2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 20, 21, 22, 23],
+    "DelayBetweenIterationsMs": 10000,
+    "KillUserConnections": true,
+    "KillUserConnectionsWithRollBackAfter": 60
+    ...
+  }
+```
+
 ## Uninstall
 
 `LogShippingService.exe uninstall`
