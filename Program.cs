@@ -6,7 +6,9 @@ namespace LogShippingService
 {
     class Program
     {
-        
+
+        public static readonly NamedLocker Locker = new();
+
         static void Main()
         {
             Directory.SetCurrentDirectory(AppContext.BaseDirectory);

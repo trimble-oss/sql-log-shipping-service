@@ -7,7 +7,6 @@ namespace LogShippingService
 {
     internal static class Config
     {
-
         public static readonly string? ContainerURL;
         public static readonly string? SASToken;
         public static readonly string ConnectionString;
@@ -16,7 +15,7 @@ namespace LogShippingService
         public static readonly int IterationDelayMs;
         public static readonly int OffSetMins;
         public static readonly int MaxProcessingTimeMins;
-        public static readonly string DatabaseToken="{DatabaseName}";
+        public static readonly string DatabaseToken = "{DatabaseName}";
         private const string ConfigFile = "appsettings.json";
         public static readonly string? StandbyFileName;
         public static bool KillUserConnections;
@@ -24,6 +23,8 @@ namespace LogShippingService
         public static List<int> Hours;
         public static List<string> IncludedDatabases;
         public static List<string> ExcludedDatabases;
+        public static string? SourceConnectionString;
+        public static int PollForNewDatabasesFrequency;
 
         static Config()
         {
@@ -42,6 +43,8 @@ namespace LogShippingService
                 KillUserConnectionsWithRollBackAfter = int.Parse(configuration["Config:KillUserConnectionsWithRollbackAfter"] ?? 60.ToString());
                 IncludedDatabases = configuration.GetSection("Config:IncludedDatabases").Get<List<string>>() ?? new List<string>();
                 ExcludedDatabases = configuration.GetSection("Config:ExcludedDatabases").Get<List<string>>() ?? new List<string>();
+                SourceConnectionString = configuration["Config:SourceConnectionString"];
+                PollForNewDatabasesFrequency = int.Parse(configuration["Config:PollForNewDatabasesFrequency"] ?? 1.ToString());
                 Log.Information("Included {IncludedDBs}", IncludedDatabases);
                 Log.Information("Excluded {ExcludedDBs}", ExcludedDatabases);
                 Hours = configuration.GetSection("Config:Hours").Get<List<int>>() ?? new List<int>
@@ -62,16 +65,16 @@ namespace LogShippingService
                 {
                     SASToken = EncryptionHelper.DecryptWithMachineKey(SASToken);
                 }
-                
+
                 if (!string.IsNullOrEmpty(ConnectionString) && string.IsNullOrEmpty(SASToken))
                 {
                     var message = "SASToken is required with ContainerUrl";
                     Log.Error(message);
                     throw new ArgumentException(message);
                 }
-                if(!string.IsNullOrEmpty(StandbyFileName) && (!Config.StandbyFileName.Contains(DatabaseToken)))
+                if (!string.IsNullOrEmpty(StandbyFileName) && (!Config.StandbyFileName.Contains(DatabaseToken)))
                 {
-                    Log.Error("Missing {DatabaseToken} from StandbyFileName",DatabaseToken);
+                    Log.Error("Missing {DatabaseToken} from StandbyFileName", DatabaseToken);
                     throw new ArgumentException($"Missing {DatabaseToken} from StandbyFileName");
                 }
 
@@ -90,15 +93,13 @@ namespace LogShippingService
             }
             catch (Exception ex)
             {
-                Log.Error(ex,"Error reading config");
+                Log.Error(ex, "Error reading config");
                 throw;
             }
         }
 
-
-        private static void Update(string section,string key, string value)
+        private static void Update(string section, string key, string value)
         {
-            
             var json = File.ReadAllText(ConfigFile);
             dynamic jsonObj = JsonConvert.DeserializeObject(json) ?? throw new InvalidOperationException();
 
