@@ -23,5 +23,8 @@ namespace LogShippingService
 
         public static string GetDatabases => GetSqlString("GetDatabases");
 
+        public static string GetUserDatabases => GetSqlString("GetUserDatabases");
+
+        public static string GetFilesForLastBackup => GetSqlString("GetFilesForLastBackup");
     }
 }

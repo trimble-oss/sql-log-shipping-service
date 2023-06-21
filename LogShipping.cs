@@ -1,4 +1,7 @@
-﻿using System.Data;
+﻿using System.Collections.Concurrent;
+using System.Data;
+using System.Reflection.Metadata.Ecma335;
+using System.Runtime.InteropServices;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Microsoft.Data.SqlClient;
@@ -12,10 +15,16 @@ namespace LogShippingService
 
         private bool _isStopRequested;
         private bool _isShutdown;
+        public static ConcurrentDictionary<string,string> InitializingDBs = new();
 
+        private readonly LogShippingInitializer _initializer = new();
+
+        private readonly Waiter wait = new();
+     
         public void Start()
         {
             Task.Run(StartProcessing);
+            Task.Run(_initializer.PollForNewDBs);
         }
 
         private void StartProcessing()
@@ -23,7 +32,10 @@ namespace LogShippingService
             long i = 1;
             while (!_isStopRequested)
             {
-                WaitUntilActiveHours();
+                if (!wait.WaitUntilActiveHours())
+                {
+                    break;
+                }
                 Log.Information("Starting iteration {0}",i);
                 try
                 {
@@ -43,33 +55,25 @@ namespace LogShippingService
                 }
                 i++;
             }
-            Log.Information("Shutdown complete.");
+            Log.Information("Finished processing LOG restores");
             _isShutdown = true;
         }
 
-        private static void WaitUntilActiveHours()
-        {
-            while (!CanRestoreLogsNow)
-            {
-                var now = DateTime.Now;
-                var nextHour = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0).AddHours(1);
-                var delay = Convert.ToInt32((nextHour - now).TotalMilliseconds);
-                if (CanRestoreLogsNow) return;
-                Log.Information("Waiting for active hours to run {Hours}", Config.Hours);
-                Thread.Sleep(delay);
-            }
-        }
-
-        public static bool CanRestoreLogsNow=> Config.Hours.Contains(DateTime.Now.Hour);
+ 
 
         public void Stop()
         {
             Log.Information("Initiating shutdown...");
             _isStopRequested=true;
-            while (!_isShutdown)
+            _initializer.Stop();
+            wait.Stop();
+            while (!_isShutdown || !_initializer.IsStopped)
             {
-                System.Threading.Thread.Sleep(100);
+                Thread.Sleep(100);
             }
+            Log.Information("Shutdown complete.");
+            Log.CloseAndFlush();
+
         }
 
         private void Process()
@@ -82,17 +86,22 @@ namespace LogShippingService
 
             Parallel.ForEach(dt.AsEnumerable(), new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads }, row =>
             {
-                if (!_isStopRequested && CanRestoreLogsNow)
+                if (!_isStopRequested && Waiter.CanRestoreLogsNow)
                 {
                     var db = (string)row["Name"];
-                    DateTime fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
+                    if (InitializingDBs.ContainsKey(db.ToLower()))
+                    {
+                        Log.Information("Skipping log restores for {db} due to initialization",db);
+                        return;
+                    }
+                    var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
                     fromDate = fromDate.AddMinutes(Config.OffSetMins);
                     ProcessDatabase(db, fromDate);
                 }
             });
         }
 
-        private bool IsIncludedDatabase(string db)
+        public static bool IsIncludedDatabase(string db)
         {
             bool isExcluded = Config.ExcludedDatabases.Count > 0 && Config.ExcludedDatabases.Any(e => e.Equals(db, StringComparison.OrdinalIgnoreCase));
             bool isIncluded = Config.IncludedDatabases.Count == 0 || Config.IncludedDatabases.Any(e => e.Equals(db, StringComparison.OrdinalIgnoreCase));
@@ -109,7 +118,7 @@ namespace LogShippingService
             }
             var logFiles = GetFilesForDb(db, fromDate);
        
-            using (var op = Operation.Begin("Restore Logs for {DB}", db))
+            using (var op = Operation.Begin("Restore Logs for {DatabaseName}", db))
             {
                 try
                 {
@@ -195,7 +204,7 @@ namespace LogShippingService
                 
                 if (DateTime.Now > maxTime) 
                 {
-                    // Stop processing logs if max processing time is exceeded. Prevents a single DB that has fallen behind from impacting other DBs
+                    // Stop processing logs if max processing time is exceeded. Prevents a single DatabaseName that has fallen behind from impacting other DBs
                     throw new TimeoutException("Max processing time exceeded");
                 }
 
@@ -205,7 +214,7 @@ namespace LogShippingService
                     break;
                 }
 
-                if (!CanRestoreLogsNow)
+                if (!Waiter.CanRestoreLogsNow)
                 {
                     Log.Information("Halt log restores for {db} due to Hours configuration", db);
                     break;
@@ -256,14 +265,7 @@ namespace LogShippingService
 
         private static void Execute(string sql)
         {
-            using (var op = Operation.Begin(sql))
-            {
-                using var cn = new SqlConnection(Config.ConnectionString);
-                using var cmd = new SqlCommand(sql, cn) { CommandTimeout = 0 };
-                cn.Open();
-                cmd.ExecuteNonQuery();
-                op.Complete();
-            }
+            DataHelper.ExecuteWithTiming(sql,Config.ConnectionString);
         }
 
         public static DataTable GetDatabases()
@@ -276,13 +278,14 @@ namespace LogShippingService
             return dt;
         }
 
+ 
         private static List<string> GetFilesForDb(string db, DateTime fromDate)
         {
             var path = Config.LogFilePathTemplate.Replace(Config.DatabaseToken, db);
             List<string> logFiles;
             if (string.IsNullOrEmpty(Config.ContainerURL))
             {
-                using (var op = Operation.Begin("Get logs for {DB} after {date} (Offset:{offset}) from {path}", db,
+                using (var op = Operation.Begin("Get logs for {DatabaseName} after {date} (Offset:{offset}) from {path}", db,
                            fromDate, Config.OffSetMins, path))
                 {
                     logFiles = GetFilesForDbUnc(path, fromDate);
@@ -291,7 +294,7 @@ namespace LogShippingService
             }
             else
             {
-                using (var op = Operation.Begin("Query Azure Blob for {DB} after {date} (Offset:{offset}):{prefix}", db, fromDate, Config.OffSetMins, path))
+                using (var op = Operation.Begin("Query Azure Blob for {DatabaseName} after {date} (Offset:{offset}):{prefix}", db, fromDate, Config.OffSetMins, path))
                 {
                     logFiles = GetFilesForDbAzBlob(path, fromDate);
                     op.Complete("FileCount", logFiles.Count);

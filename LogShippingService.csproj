@@ -10,6 +10,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <None Remove="SQL\GetFilesForLastBackup.sql" />
+    <None Remove="SQL\GetUserDatabases.sql" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Content Include="Services_5724.ico" />
   </ItemGroup>
 
@@ -30,6 +35,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="SQL\GetDatabases.sql" />
+    <EmbeddedResource Include="SQL\GetFilesForLastBackup.sql" />
+    <EmbeddedResource Include="SQL\GetUserDatabases.sql" />
   </ItemGroup>
 
   <ItemGroup>
