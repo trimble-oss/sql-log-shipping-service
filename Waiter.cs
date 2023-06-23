@@ -17,10 +17,10 @@ namespace LogShippingService
 
         public bool WaitUntilActiveHours()
         {
-            if (!CanRestoreLogsNow)
-            {
-                Log.Information("Waiting for active hours to run {Hours}", Config.Hours);
-            }
+            if (CanRestoreLogsNow) return !_isStopRequested;
+
+            Log.Information("Waiting for active hours to run {Hours}", Config.Hours);
+            
             while (!CanRestoreLogsNow && !_isStopRequested)
             {
                 Thread.Sleep(1000);
