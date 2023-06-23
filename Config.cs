@@ -25,6 +25,7 @@ namespace LogShippingService
         public static List<string> ExcludedDatabases;
         public static string? SourceConnectionString;
         public static int PollForNewDatabasesFrequency;
+        public static bool CheckHeaders;
 
         static Config()
         {
@@ -45,6 +46,7 @@ namespace LogShippingService
                 ExcludedDatabases = configuration.GetSection("Config:ExcludedDatabases").Get<List<string>>() ?? new List<string>();
                 SourceConnectionString = configuration["Config:SourceConnectionString"];
                 PollForNewDatabasesFrequency = int.Parse(configuration["Config:PollForNewDatabasesFrequency"] ?? 1.ToString());
+                CheckHeaders = bool.Parse(configuration["Config:CheckHeaders"] ?? true.ToString());
                 Log.Information("Included {IncludedDBs}", IncludedDatabases);
                 Log.Information("Excluded {ExcludedDBs}", ExcludedDatabases);
                 Hours = configuration.GetSection("Config:Hours").Get<List<int>>() ?? new List<int>

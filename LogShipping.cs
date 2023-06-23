@@ -1,7 +1,9 @@
 ﻿using System.Collections.Concurrent;
 using System.Data;
+using System.Numerics;
 using System.Reflection.Metadata.Ecma335;
 using System.Runtime.InteropServices;
+using System.Security;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using Microsoft.Data.SqlClient;
@@ -117,7 +119,6 @@ namespace LogShippingService
                 return;
             }
             var logFiles = GetFilesForDb(db, fromDate);
-       
             using (var op = Operation.Begin("Restore Logs for {DatabaseName}", db))
             {
                 try
@@ -134,37 +135,89 @@ namespace LogShippingService
                 }
                 catch (SqlException ex) when (ex.Number == 4305)
                 {
-                    switch (processCount)
-                    {
-                        // Too recent
-                        case 1:
-                            Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 60min.");
-                            ProcessDatabase(db, fromDate.AddMinutes(-60), processCount + 1);
-                            break;
-                        case 2:
-                            Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 1 day.");
-                            ProcessDatabase(db, fromDate.AddMinutes(-1440), processCount + 1);
-                            break;
-                        default:
-                            Log.Error(ex,"Log file too recent to apply.  Manual intervention might be required.");
-                            break;
-                    }
+                    HandleTooRecent(ex,db,fromDate,processCount);
+                }
+                catch (HeaderVerificationException ex) when (ex.VerificationStatus ==
+                                                             BackupHeader.HeaderVerificationStatus.TooRecent)
+                {
+                    HandleTooRecent(ex, db, fromDate, processCount);
                 }
                 catch (Exception ex)
                 {
                     Log.Error(ex, "Error restoring logs for {db}", db);
                 }
             }
+
         }
 
-        private void RestoreLogs(List<string> logFiles,string db)
+        private void HandleTooRecent(Exception ex,string db,DateTime fromDate, int processCount)
         {
+            switch (processCount)
+            {
+                // Too recent
+                case 1:
+                    Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 60min.");
+                    ProcessDatabase(db, fromDate.AddMinutes(-60), processCount + 1);
+                    break;
+                case 2:
+                    Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 1 day.");
+                    ProcessDatabase(db, fromDate.AddMinutes(-1440), processCount + 1);
+                    break;
+                default:
+                    Log.Error(ex, "Log file too recent to apply.  Manual intervention might be required.");
+                    break;
+            }
+        }
+
+        private void RestoreLogs(List<string> logFiles, string db)
+        {
+            BackupHeader? header=null;
+            BigInteger? redoStartOrPreviousLastLSN = null;
+            if (Config.CheckHeaders)
+            {
+                redoStartOrPreviousLastLSN = DataHelper.GetRedoStartLSNForDB(db, Config.ConnectionString);
+                Log.Debug("{db} Redo Start LSN: {RedoStartLSN}",db, redoStartOrPreviousLastLSN);
+            }
+
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
             foreach (var logPath in logFiles)
             {
                 var file = logPath.SqlSingleQuote();
                 var urlOrDisk = string.IsNullOrEmpty(Config.ContainerURL) ? "DISK" : "URL";
                 var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY";
+
+                if (Config.CheckHeaders)
+                {
+                    var headers = BackupHeader.GetHeaders(logPath, Config.ConnectionString,
+                        string.IsNullOrEmpty(Config.ContainerURL)
+                            ? BackupHeader.DeviceTypes.Disk
+                            : BackupHeader.DeviceTypes.Url);
+                    if (headers.Count > 1)
+                    {
+                        throw new Exception("File contains multiple backups");
+                    }
+                    header = headers[0];
+
+                    if(header.DatabaseName != db)
+                    {
+                        throw new HeaderVerificationException(
+                            $"Header verification failed for {logPath}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase );
+                    }
+    
+                    if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN >= redoStartOrPreviousLastLSN)
+                    {
+                        Log.Information("Header verification successful for {logPath}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.FirstLSN, header.LastLSN);
+                    }
+                    else if (header.FirstLSN < redoStartOrPreviousLastLSN)
+                    {
+                        Log.Information("Skipping {logPath}.  A later LSN is required: {RequiredLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}",logPath, redoStartOrPreviousLastLSN, header.FirstLSN,header.LastLSN);
+                        continue;
+                    }
+                    else if (header.FirstLSN > redoStartOrPreviousLastLSN)
+                    {
+                        throw new HeaderVerificationException($"Header verification failed for {logPath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
+                    }
+                }
           
                 try
                 {
@@ -218,6 +271,11 @@ namespace LogShippingService
                 {
                     Log.Information("Halt log restores for {db} due to Hours configuration", db);
                     break;
+                }
+
+                if (header!=null)
+                {
+                    redoStartOrPreviousLastLSN = header.LastLSN;
                 }
             }
             RestoreWithStandby(db);

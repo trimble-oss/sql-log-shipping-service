@@ -3,13 +3,14 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
+using System.Numerics;
 using System.Text;
 using System.Threading.Tasks;
 using SerilogTimings;
 
 namespace LogShippingService
 {
-    public static class DataHelper
+    public class DataHelper
     {
 
         public static DataTable GetDataTable(string sql,string connectionString)
@@ -96,6 +97,15 @@ namespace LogShippingService
                 i++;
             }
             return builder.ToString();
+        }
+
+        public static BigInteger GetRedoStartLSNForDB(string db, string connectionString)
+        {
+            using var cn = new SqlConnection(connectionString);
+            using var cmd = new SqlCommand(SqlStrings.GetRedoStartLSN, cn) { CommandTimeout = 0 };
+            cmd.Parameters.AddWithValue("@db", db);
+            cn.Open();
+            return BigInteger.Parse(cmd.ExecuteScalar().ToString() ?? throw new InvalidOperationException());
         }
     }
 }
