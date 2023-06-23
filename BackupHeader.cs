@@ -1,5 +1,8 @@
 ﻿using System.Data;
 using System.Numerics;
+using Serilog;
+using Serilog.Events;
+using SerilogTimings;
 
 namespace LogShippingService
 {
@@ -28,6 +31,15 @@ namespace LogShippingService
             UrlPhysical = 109,
             TapePhysical = 105,
             DiskPhysical = 102
+        }
+
+        public enum HeaderVerificationStatus
+        {
+            Verified,
+            TooRecent,
+            TooEarly,
+            WrongDatabase,
+            Other
         }
 
         public string? BackupName { get; set; }
@@ -215,6 +227,11 @@ namespace LogShippingService
             }
         }
 
+        public static List<BackupHeader> GetHeaders(string backupFile, string connectionString, DeviceTypes deviceType)
+        {
+            return GetHeaders(new List<string>(){backupFile}, connectionString, deviceType);
+        }
+
         public static List<BackupHeader> GetHeaders(List<string> backupFiles, string connectionString, DeviceTypes deviceType)
         {
             if (backupFiles == null || backupFiles.Count == 0)
@@ -223,7 +240,10 @@ namespace LogShippingService
             }
             List<BackupHeader> headers = new();
             var headerSQL = DataHelper.GetHeaderOnlyScript(backupFiles, deviceType);
+            using var op = Operation.Begin(headerSQL.Replace(Environment.NewLine," "));
             var dt = DataHelper.GetDataTable(headerSQL, connectionString);
+            op.Complete();
+            
             foreach (DataRow row in dt.Rows)
             {
                 headers.Add(new BackupHeader(row));
