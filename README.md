@@ -75,7 +75,7 @@ If users are able to query the log shipped databases, their connections can prev
     "DelayBetweenIterationsMs": 10000,
     "KillUserConnections": true,
     "KillUserConnectionsWithRollBackAfter": 60
-    ...
+    //...
   }
 ```
 
@@ -88,7 +88,8 @@ Only log ship DB1, DB2, DB3 and DB4:
 ```json
   "Config": {
       "IncludedDatabases": ["DB1", "DB2", "DB3", "DB4"]
-      ...
+      //...
+  }
 ```
 
 Log ship everything EXCEPT DB1, DB2, DB3 and DB4.
@@ -96,8 +97,24 @@ Log ship everything EXCEPT DB1, DB2, DB3 and DB4.
 ```json
   "Config": {
       "ExcludedDatabases": ["DB1", "DB2", "DB3", "DB4"]
-      ...
+      //...
+  }
 ```
+
+## Initialization for new databases
+
+You can initialize new databases created on the primary instance by specifying a **SourceConnectionString**.  You can also adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min).  Databases that already exist on the target server are skipped. Other databases can be excluded by specifying **ExcludedDatabases**. See [Include/Exclude Databases](#includeexclude-databases)
+
+```json
+  "Config": {
+      "SourceConnectionString": "Data Source=PRIMARY1;Integrated Security=True;Encrypt=True;Trust Server Certificate=True",
+      "PollForNewDatabasesFrequency" : 1,
+      "ExcludedDatabases": ["LSExcluded1", "LSExcluded2"]
+      //...
+  }
+```
+
+To be initialized, the database should be online with FULL or BULK LOGGED recovery model.  The database needs a FULL backup and the backup location must be accessible on the target server.  If you use Ola Hallengren's backup solution, the @ChangeBackupType parameter can be used to create a FULL backup for new databases when the LOG backup job runs.
 
 ## Uninstall
 
@@ -112,15 +129,5 @@ For each database, it will query for any new log backup files in the Azure blob 
 The **MaxProcessingTimeMins** parameter is used to prevent a single database that has fallen behind from impacting other databases.  If this is set to 60, the service will move on to the next database after 60 minutes of processing log restores for a single database.  Processing will continue for that database in the next iteration.  
 
 Once the service has looped through all the databases, it will start the next iteration after a delay (**DelayBetweenIterationsMs**)
-
-## Limitations
-
-* The service doesn't handle the initial restore of the full backup from the primary.  
-dbatools could be used for this purpose.  e.g.
-
-`Copy-DbaDatabase -Source primarysql -Destination secondarysql -BackupRestore -UseLastBackup -NoRecovery -AllDatabases`
-
-If the database already exists, it will be skipped.
-* There is no configuration option to specify what databases to include/exclude. If the DB is in a restoring state with FULL or BULK LOGGED recovery it will be assumed to be part of the log shipping solution.  
 
 
