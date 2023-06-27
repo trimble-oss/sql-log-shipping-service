@@ -101,6 +101,17 @@ Log ship everything EXCEPT DB1, DB2, DB3 and DB4.
   }
 ```
 
+## Header verification
+
+Header verification is done by default using RESTORE HEADERONLY to validate the backup before running RESTORE LOG.  This adds some extra overhead.  It's possible to turn off header verification using:
+
+```json
+  "Config": {
+    "CheckHeaders": false,
+    //..
+  }
+```
+
 ## Initialization for new databases
 
 You can initialize new databases created on the primary instance by specifying a **SourceConnectionString**.  You can also adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min).  Databases that already exist on the target server are skipped. Other databases can be excluded by specifying **ExcludedDatabases**. See [Include/Exclude Databases](#includeexclude-databases)
