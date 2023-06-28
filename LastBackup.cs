@@ -80,6 +80,7 @@ namespace LogShippingService
             using var da = new SqlDataAdapter(cmd);
             cmd.Parameters.AddWithValue("@db", db);
             cmd.Parameters.AddWithValue("@backup_type", backupType);
+            cmd.Parameters.AddWithValue("@MaxBackupAgeForInitialization", Config.MaxBackupAgeForInitialization);
             var dt = new DataTable();
             da.Fill(dt);
             return dt;

@@ -15,85 +15,47 @@ using Microsoft.Extensions.FileProviders.Physical;
 
 namespace LogShippingService
 {
-    public class LogShippingInitializer
+    public class DatabaseInitializerFromMSDB: DatabaseInitializerBase
     {
-
-        private bool _stopRequested;
-        private readonly Waiter wait = new();
-
-        public void Stop()
-        {
-            wait.Stop();
-            _stopRequested = true;
-        }
-
-        public bool IsStopped { get; private set; }
-
+        public override bool IsValidated => !string.IsNullOrEmpty(Config.SourceConnectionString);
 
         /// <summary>
         /// Check for new DBs in the source connection that don't exist in the destination.  
         /// </summary>
-        public void PollForNewDBs()
+        protected override void PollForNewDBs()
         {
-            if (string.IsNullOrEmpty(Config.SourceConnectionString))
+            List<DatabaseInfo> newDBs;
+            using (Operation.Time("PollForNewDBs"))
             {
-                IsStopped = true;
-                return;
+                newDBs = GetNewDatabases();
             }
-            while (!_stopRequested)
-            {
-                if (!wait.WaitUntilActiveHours())
+
+            Log.Information("NewDBs:{Count}", newDBs.Count);
+            Parallel.ForEach(newDBs.AsEnumerable(),
+                new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
+                newDb =>
                 {
-                    break;
-                }
-                var nextIterationStart = DateTime.Now.AddMinutes(Config.PollForNewDatabasesFrequency);
-                try
-                {
-                    List<DatabaseInfo> newDBs;
-                    using (Operation.Time("PollForNewDBs"))
+                    if (IsStopRequested) return;
+                    try
                     {
-                        newDBs = GetNewDatabases();
-                    }
-
-                    Log.Information("NewDBs:{Count}", newDBs.Count);
-                    Parallel.ForEach(newDBs.AsEnumerable(),
-                        new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
-                        newDb =>
+                        if (LogShipping.InitializingDBs.TryAdd(newDb.Name.ToLower(), newDb.Name)) // To prevent log restores until initialization is complete
                         {
-                            try
-                            {
-                                if (LogShipping.InitializingDBs.TryAdd(newDb.Name.ToLower(), newDb.Name)) // To prevent log restores until initialization is complete
-                                {
-                                    ProcessDB(newDb.Name);
-                                }
-                                else
-                                {
-                                    Log.Error("{db} is already initializing",newDb.Name);
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                Log.Error(ex, "Error initializing new database from backup {db}", newDb.Name);
-                            }
-                            finally
-                            {
-                                LogShipping.InitializingDBs.TryRemove(newDb.Name.ToLower(),out _); // Log restores can start after restore operations have completed
-                            }
-                        });
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "PollForNewDatabases error");
-                }
-
-
-                while (DateTime.Now < nextIterationStart && !_stopRequested)
-                {
-                    Thread.Sleep(100);
-                }
-            }
-            Log.Information("PollForNewDBs shutdown");
-            IsStopped = true;
+                            ProcessDB(newDb.Name);
+                        }
+                        else
+                        {
+                            Log.Error("{db} is already initializing",newDb.Name);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Error initializing new database from backup {db}", newDb.Name);
+                    }
+                    finally
+                    {
+                        LogShipping.InitializingDBs.TryRemove(newDb.Name.ToLower(),out _); // Log restores can start after restore operations have completed
+                    }
+                });
         }
 
 
@@ -144,7 +106,7 @@ namespace LogShippingService
             var sourceDBs = DatabaseInfo.GetDatabaseInfo(Config.SourceConnectionString);
             var destDBs = DatabaseInfo.GetDatabaseInfo(Config.ConnectionString);
 
-            sourceDBs = sourceDBs.Where(db => db.RecoveryModel is 1 or 2 && db.State == 0).ToList();
+            sourceDBs = sourceDBs.Where(db => (db.RecoveryModel is 1 or 2 || Config.InitializeSimple) && db.State == 0).ToList();
 
             var newDBs = sourceDBs.Where(db =>
                 !destDBs.Any(destDb => destDb.Name.Equals(db.Name, StringComparison.OrdinalIgnoreCase))).ToList();

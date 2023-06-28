@@ -26,6 +26,10 @@ namespace LogShippingService
         public static string? SourceConnectionString;
         public static int PollForNewDatabasesFrequency;
         public static bool CheckHeaders;
+        public static string? FullBackupPathTemplate;
+        public static string? DiffBackupPathTemplate;
+        public static bool InitializeSimple;
+        public static int MaxBackupAgeForInitialization;
 
         static Config()
         {
@@ -83,6 +87,8 @@ namespace LogShippingService
                 ConnectionString = configuration["Config:Destination"] ?? throw new InvalidOperationException();
                 MaxThreads = int.Parse(configuration["Config:MaxThreads"] ?? throw new InvalidOperationException());
                 LogFilePathTemplate = configuration["Config:LogFilePath"] ?? throw new InvalidOperationException();
+                FullBackupPathTemplate = configuration["Config:FullFilePath"];
+                DiffBackupPathTemplate = configuration["Config:DiffFilePath"];
                 if (!LogFilePathTemplate.Contains(DatabaseToken))
                 {
                     throw new ValidationException($"LogFilePathTemplate should contain '{DatabaseToken}'");
@@ -92,6 +98,8 @@ namespace LogShippingService
                 OffSetMins = int.Parse(configuration["Config:OffsetMins"] ?? throw new InvalidOperationException());
                 MaxProcessingTimeMins = int.Parse(configuration["Config:MaxProcessingTimeMins"] ??
                                                     throw new InvalidOperationException());
+                InitializeSimple = bool.Parse(configuration["Config:InitializeSimple"] ?? false.ToString());
+                MaxBackupAgeForInitialization = int.Parse(configuration["Config:MaxBackupAgeForInitialization"] ?? 14.ToString());
             }
             catch (Exception ex)
             {

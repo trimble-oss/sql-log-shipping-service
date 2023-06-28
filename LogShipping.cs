@@ -19,14 +19,31 @@ namespace LogShippingService
         private bool _isShutdown;
         public static ConcurrentDictionary<string,string> InitializingDBs = new();
 
-        private readonly LogShippingInitializer _initializer = new();
+        private readonly DatabaseInitializerBase? _initializer;
 
         private readonly Waiter wait = new();
+
+        public LogShipping()
+        {
+            if (!string.IsNullOrEmpty(Config.SourceConnectionString))
+            {
+                Log.Information("New DBs initialized from msdb history last backup every {interval} mins.", Config.PollForNewDatabasesFrequency);
+                _initializer = new DatabaseInitializerFromMSDB();
+            }
+            else if(!string.IsNullOrEmpty(Config.FullBackupPathTemplate) && string.IsNullOrEmpty(Config.ContainerURL))
+            {
+                Log.Information("New DBs initialized from disk every {interval} mins.", Config.PollForNewDatabasesFrequency);
+                _initializer = new DatabaseInitializerFromDisk();
+            }
+        }
      
         public void Start()
         {
             Task.Run(StartProcessing);
-            Task.Run(_initializer.PollForNewDBs);
+            if (_initializer != null)
+            {
+                Task.Run(_initializer.RunPollForNewDBs);
+            }
         }
 
         private void StartProcessing()
@@ -67,15 +84,21 @@ namespace LogShippingService
         {
             Log.Information("Initiating shutdown...");
             _isStopRequested=true;
-            _initializer.Stop();
+            _initializer?.Stop();
             wait.Stop();
-            while (!_isShutdown || !_initializer.IsStopped)
-            {
-                Thread.Sleep(100);
-            }
+            _initializer?.WaitForShutdown();
+            WaitForShutdown();
             Log.Information("Shutdown complete.");
             Log.CloseAndFlush();
 
+        }
+
+        public void WaitForShutdown()
+        {
+            while (!_isShutdown)
+            {
+                Thread.Sleep(100);
+            }
         }
 
         private void Process()
