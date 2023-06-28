@@ -13,9 +13,11 @@ namespace LogShippingService
         public BackupHeader.DeviceTypes DeviceType = BackupHeader.DeviceTypes.Unknown;
         public string DatabaseName;
         public DateTime BackupFinishDate = DateTime.MinValue;
+        public BackupHeader.BackupTypes BackupType { get; private set; }
 
         public LastBackup(string databaseName, string connectionString, BackupHeader.BackupTypes type)
         {
+            BackupType = type;
             DatabaseName = databaseName;
             var lastBackup = GetFilesForLastBackup(databaseName, type.ToBackupTypeChar(), connectionString);
             foreach (DataRow row in lastBackup.Rows)
@@ -71,7 +73,7 @@ namespace LogShippingService
 
         public string GetFileListOnlyScript() => DataHelper.GetFileListOnlyScript(FileList, DeviceType);
 
-        public string GetRestoreDbScript() => DataHelper.GetRestoreDbScript(FileList, DatabaseName, DeviceType);
+        public string GetRestoreDbScript() => DataHelper.GetRestoreDbScript(FileList, DatabaseName, DeviceType, BackupType == BackupHeader.BackupTypes.DatabaseFull);
 
         internal static DataTable GetFilesForLastBackup(string db, char backupType, string connectionString)
         {

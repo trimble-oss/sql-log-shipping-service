@@ -60,11 +60,20 @@ namespace LogShippingService
             return builder.ToString();
         }
 
-        public static string GetRestoreDbScript(List<string> files, string db, BackupHeader.DeviceTypes type)
+        public static string GetRestoreDbScript(List<string> files, string db, BackupHeader.DeviceTypes type,bool withThrowErrorIfExists)
         {
             var from = GetFromDisk(files, type);
             if (string.IsNullOrEmpty(from)) { return string.Empty; }
             StringBuilder builder = new();
+            if (withThrowErrorIfExists)
+            {
+                builder.AppendLine($"IF DB_ID(" + db.SqlSingleQuote() + ") IS NOT NULL");
+                builder.AppendLine("BEGIN");
+                builder.AppendLine("\tRAISERROR('Database already exists',11,1)");
+                builder.AppendLine("\tRETURN");
+                builder.AppendLine("END");
+                builder.AppendLine();
+            }
             builder.AppendLine($"RESTORE DATABASE {db.SqlQuote()} ");
             builder.AppendLine(from);
             builder.Append("WITH NORECOVERY");

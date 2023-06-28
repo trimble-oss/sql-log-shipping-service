@@ -63,10 +63,10 @@ namespace LogShippingService
         /// Get the last FULL/DIFF backup for the database from msdb history & restore
         /// </summary>
         /// <param name="db">Database name</param>
-        private static void ProcessDB(string db)
+        private void ProcessDB(string db)
         {
             if (Config.SourceConnectionString == null) return;
-            if (!LogShipping.IsIncludedDatabase(db)) return;
+            if (!IsValidForInitialization(db)) return;
             Log.Information("Initializing new database: {db}", db);
             var lastFull = new LastBackup(db, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseFull );
             var lastDiff = new LastBackup(db, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseDiff );
@@ -99,17 +99,17 @@ namespace LogShippingService
        /// Get a list of databases that exist in the source connection that don't exist in the destination.   Only include ONLINE databases with FULL or BULK LOGGED recovery model
        /// </summary>
        /// <returns></returns>
-       private static List<DatabaseInfo> GetNewDatabases()
+       private List<DatabaseInfo> GetNewDatabases()
         {
             if (Config.SourceConnectionString == null) return new List<DatabaseInfo>();
+            if(DestinationDBs==null) return new List<DatabaseInfo>();
 
             var sourceDBs = DatabaseInfo.GetDatabaseInfo(Config.SourceConnectionString);
-            var destDBs = DatabaseInfo.GetDatabaseInfo(Config.ConnectionString);
 
             sourceDBs = sourceDBs.Where(db => (db.RecoveryModel is 1 or 2 || Config.InitializeSimple) && db.State == 0).ToList();
 
             var newDBs = sourceDBs.Where(db =>
-                !destDBs.Any(destDb => destDb.Name.Equals(db.Name, StringComparison.OrdinalIgnoreCase))).ToList();
+                !DestinationDBs.Any(destDb => destDb.Name.Equals(db.Name, StringComparison.OrdinalIgnoreCase))).ToList();
 
             return newDBs;
         }

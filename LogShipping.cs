@@ -35,6 +35,11 @@ namespace LogShippingService
                 Log.Information("New DBs initialized from disk every {interval} mins.", Config.PollForNewDatabasesFrequency);
                 _initializer = new DatabaseInitializerFromDisk();
             }
+            else if (!string.IsNullOrEmpty(Config.FullBackupPathTemplate) && !string.IsNullOrEmpty(Config.ContainerURL) && !string.IsNullOrEmpty(Config.SASToken))
+            {
+                Log.Information("New DBs initialized from Blob every {interval} mins.", Config.PollForNewDatabasesFrequency);
+                _initializer = new DatabaseInitializerFromAzBlob();
+            }
         }
      
         public void Start()
@@ -395,7 +400,7 @@ namespace LogShippingService
             return files;
         }
 
-        private static List<string> GetFilesForDbAzBlob(string prefix, DateTime fromDate)
+        public static List<string> GetFilesForDbAzBlob(string prefix, DateTime fromDate)
         {
             var containerUri = new Uri(Config.ContainerURL + Config.SASToken);
             var containerClient = new BlobContainerClient(containerUri);

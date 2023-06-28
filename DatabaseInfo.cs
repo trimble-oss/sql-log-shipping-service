@@ -2,7 +2,7 @@
 
 namespace LogShippingService
 {
-    internal class DatabaseInfo
+    public class DatabaseInfo
     {
         public string Name { get; set; } = null!;
         public short RecoveryModel { get; set; }
