@@ -114,18 +114,52 @@ Header verification is done by default using RESTORE HEADERONLY to validate the 
 
 ## Initialization for new databases
 
-You can initialize new databases created on the primary instance by specifying a **SourceConnectionString**.  You can also adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min).  Databases that already exist on the target server are skipped. Other databases can be excluded by specifying **ExcludedDatabases**. See [Include/Exclude Databases](#includeexclude-databases)
+### Using msdb history from primary
+
+You can initialize new databases created on the primary instance by specifying a **SourceConnectionString**. 
 
 ```json
   "Config": {
-      "SourceConnectionString": "Data Source=PRIMARY1;Integrated Security=True;Encrypt=True;Trust Server Certificate=True",
-      "PollForNewDatabasesFrequency" : 1,
-      "ExcludedDatabases": ["LSExcluded1", "LSExcluded2"]
+      "SourceConnectionString": "Data Source=PRIMARY1;Integrated Security=True;Encrypt=True;Trust Server Certificate=True",  
       //...
   }
 ```
 
 To be initialized, the database should be online with FULL or BULK LOGGED recovery model.  The database needs a FULL backup and the backup location must be accessible on the target server.  If you use Ola Hallengren's backup solution, the @ChangeBackupType parameter can be used to create a FULL backup for new databases when the LOG backup job runs.
+
+### From backup folder
+
+To initialize from folder you also need to specify the folder locations for your FULL/DIFF backups.  Use the *{DatabaseName}* token in place of the database name.  <u>Don't</u> include a **SourceConnectionString** otherwise initialization will be done from msdb history instead.  
+
+```json
+  "Config": {
+    "LogFilePath": "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\LOG",
+    "FullFilePath": "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\FULL",
+    "DiffFilePath": "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\DIFF",
+    //...
+  }
+```
+
+In the example above, the service enumerates all the folders in the path "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\" (Taken from "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\FULL").  If processes each folder/database in parallel.  If the database doesn't exist if will restore the database from the last FULL/DIFF backup.
+
+### Other options for initialization
+
+You can adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min).  
+
+Databases that already exist on the target server are skipped. Other databases can be excluded by specifying **ExcludedDatabases**. See [Include/Exclude Databases](#includeexclude-databases)
+
+It doesn't make sense to include SIMPLE recovery model DBs for log shipping so they are excluded by default.  It could be useful to include them in a disaster recovery scenario though by specifying **InitializeSimple**.  
+
+The log shipping service doesn't consider backups older than 14 days by default.  If you are initializing from disk this will prevent restoring a backup for an old database that was deleted.  It also prevents initializing from an old backup that will need a large amount of log files applied to bring it up-to-date.  If you need to restore from an older backup you can adjust **MaxBackupAgeForInitialization**.  
+
+```json
+  "Config": {
+      "PollForNewDatabasesFrequency" : 10,
+      "ExcludedDatabases": ["LSExcluded1", "LSExcluded2"],
+      "InitializeSimple": true,
+      "MaxBackupAgeForInitialization": 30
+  }
+```
 
 ## Uninstall
 
