@@ -142,6 +142,25 @@ To initialize from folder you also need to specify the folder locations for your
 
 In the example above, the service enumerates all the folders in the path "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\" (Taken from "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\FULL").  If processes each folder/database in parallel.  If the database doesn't exist if will restore the database from the last FULL/DIFF backup.
 
+If you backup to multiple files, files with the same modified date are treated as part of the same backup set.  This avoids having to parse the file name and allows for different file naming formats.
+
+## From Azure blob
+
+To initialize from azure blob you need to specify **FullFilePath** and **DiffFilePath** using *{DatabaseName}* token in place of the database name.  If **ContainerUrl** and **SASToken** are specified these paths will be treated as azure blob paths rather than unc paths.  
+
+```json
+  "Config": {
+    "ContainerUrl": "https://your_storage_account.blob.core.windows.net/your_container_name",
+    "SASToken": "?sp=...",
+    "LogFilePath": "LOG/SERVERNAME/{DatabaseName}/",
+    "FullFilePath": "FULL/SERVERNAME/{DatabaseName}/",
+    "DiffFilePath": "DIFF/SERVERNAME/{DatabaseName}/",
+    //...
+  }
+```
+
+If you backup to multiple files, files with the same modified date are treated as part of the same backup set.  This avoids having to parse the file name and allows for different file naming formats.
+
 ### Other options for initialization
 
 You can adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min).  
@@ -158,6 +177,7 @@ The log shipping service doesn't consider backups older than 14 days by default.
       "ExcludedDatabases": ["LSExcluded1", "LSExcluded2"],
       "InitializeSimple": true,
       "MaxBackupAgeForInitialization": 30
+      //..
   }
 ```
 
