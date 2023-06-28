@@ -11,7 +11,7 @@ namespace LogShippingService
 {
     public class DatabaseInitializerFromDisk: DatabaseInitializerBase
     {
-        private List<DatabaseInfo>? DestinationDBs;
+     
 
         public override bool IsValidated
         {
@@ -26,16 +26,7 @@ namespace LogShippingService
         protected override void PollForNewDBs()
         {
             if (string.IsNullOrEmpty(Config.FullBackupPathTemplate)) return;
-            try
-            {
-                DestinationDBs = DatabaseInfo.GetDatabaseInfo(Config.ConnectionString);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex,"Error getting destination databases.");
-                return;
-            }
-
+      
             var dbRoot = Config.FullBackupPathTemplate[..Config.FullBackupPathTemplate.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
 
             Parallel.ForEach(System.IO.Directory.EnumerateDirectories(dbRoot),
@@ -57,11 +48,7 @@ namespace LogShippingService
 
         private void ProcessDB(string db)
         {
-            // Check if DB already exists
-            if (DestinationDBs==null || DestinationDBs.Exists(d => string.Equals(d.Name, db, StringComparison.CurrentCultureIgnoreCase))) return;
-            var systemDbs = new[] { "master", "model", "msdb" };
-            if (systemDbs.Any(s => s.Equals(db, StringComparison.OrdinalIgnoreCase))) return;
-
+            if (!IsValidForInitialization(db)) return;
 
             var fullFolder = Config.FullBackupPathTemplate?.Replace(Config.DatabaseToken, db);
             var diffFolder = Config.DiffBackupPathTemplate?.Replace(Config.DatabaseToken, db);
@@ -80,28 +67,6 @@ namespace LogShippingService
             catch (Exception ex)
             {
                 Log.Error(ex, "Error getting files for last FULL backup for {db} in {fullFolder}", db, fullFolder);
-                return;
-            }
-
-            var fullHeader = BackupHeader.GetHeaders(fullFiles, Config.ConnectionString, BackupHeader.DeviceTypes.Disk);
-            if (fullHeader.Count > 1)
-            {
-                Log.Error("Backup header returned multiple rows");
-                return;
-            }
-            else if (fullHeader.Count == 0)
-            {
-                Log.Error("Error reading backup header. 0 rows returned.");
-                return;
-            }
-            else if (!string.Equals(fullHeader[0].DatabaseName, db, StringComparison.CurrentCultureIgnoreCase))
-            {
-                Log.Error("Backup is for {db}.  Expected {expectedDB}. {fullFiles}", fullHeader[0].DatabaseName, db, fullFiles);
-                return;
-            }
-            else if (fullHeader[0].RecoveryModel == "SIMPLE" && !Config.InitializeSimple)
-            {
-                Log.Warning("Skipping initialization of {db} due to SIMPLE recovery model. InitializeSimple can be set to alter this behaviour for disaster recovery purposes.", db);
                 return;
             }
 
@@ -124,24 +89,9 @@ namespace LogShippingService
             {
                 Log.Warning(ex, "Error getting files for last DIFF backup for {db} in {diffFolder}. ", db, diffFolder);
             }
+
+            ProcessRestore(db,fullFiles,diffFiles, BackupHeader.DeviceTypes.Disk);
             
-            var restoreScript = DataHelper.GetRestoreDbScript(fullFiles, db, BackupHeader.DeviceTypes.Disk);
-            // Restore FULL
-            DataHelper.ExecuteWithTiming(restoreScript, Config.ConnectionString);
-
-            if (diffFiles.Count <= 0) return;
-
-            // Check header for DIFF
-            var diffHeader =
-                BackupHeader.GetHeaders(diffFiles, Config.ConnectionString, BackupHeader.DeviceTypes.Disk);
-
-            if (diffHeader[0].DatabaseName == db &&
-                diffHeader[0].DifferentialBaseLSN == fullHeader[0].DifferentialBaseLSN)
-            {
-                // Restore DIFF is applicable
-                restoreScript = DataHelper.GetRestoreDbScript(diffFiles, db, BackupHeader.DeviceTypes.Disk);
-                DataHelper.ExecuteWithTiming(restoreScript, Config.ConnectionString);
-            }
         }
 
         public static List<string> GetFilesForLastBackup(string folder)
