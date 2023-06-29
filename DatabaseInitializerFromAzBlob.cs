@@ -21,12 +21,22 @@ namespace LogShippingService
             var dbRoot = Config.FullBackupPathTemplate[..Config.FullBackupPathTemplate.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
             Log.Debug("Az DB Path : {path}", dbRoot);
 
-            var folders = GetFoldersForAzBlob(dbRoot);
-            Log.Debug("Folders: {count}", folders.Count);
-            Parallel.ForEach(folders,
-                new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
-                ProcessDB
-            );
+            if (Config.IncludedDatabases.Count > 0)
+            {
+                Parallel.ForEach(Config.IncludedDatabases,
+                    new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
+                    ProcessDB
+                );
+            }
+            else
+            {
+                var folders = GetFoldersForAzBlob(dbRoot);
+                Log.Debug("Folders: {count}", folders.Count);
+                Parallel.ForEach(folders,
+                    new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
+                    ProcessDB
+                );
+            }
         }
         
         protected override void DoProcessDB(string db)

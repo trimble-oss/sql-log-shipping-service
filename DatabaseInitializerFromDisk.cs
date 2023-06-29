@@ -26,16 +26,27 @@ namespace LogShippingService
         protected override void PollForNewDBs()
         {
             if (string.IsNullOrEmpty(Config.FullBackupPathTemplate)) return;
-      
-            var dbRoot = Config.FullBackupPathTemplate[..Config.FullBackupPathTemplate.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
 
-            Parallel.ForEach(System.IO.Directory.EnumerateDirectories(dbRoot),
-                new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
-                dbFolder =>
-                {
-                    var db = Path.GetFileName(dbFolder);
-                    ProcessDB(db);
-                });
+            var dbRoot = Config.FullBackupPathTemplate[
+                ..Config.FullBackupPathTemplate.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
+
+            if (Config.IncludedDatabases.Count > 0)
+            {
+                Parallel.ForEach(Config.IncludedDatabases,
+                    new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
+                    ProcessDB);
+            }
+            else
+            {
+
+                Parallel.ForEach(System.IO.Directory.EnumerateDirectories(dbRoot),
+                    new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
+                    dbFolder =>
+                    {
+                        var db = Path.GetFileName(dbFolder);
+                        ProcessDB(db);
+                    });
+            }
         }
 
         protected override void DoProcessDB(string db)
@@ -92,7 +103,7 @@ namespace LogShippingService
 
             var files = directory.GetFiles("*.bak")
                 .Where(f => f.LastWriteTimeUtc >= DateTime.UtcNow.AddDays(-Config.MaxBackupAgeForInitialization))
-                .OrderBy(f => f.LastWriteTimeUtc)
+                .OrderByDescending(f => f.LastWriteTimeUtc)
                 .ToList();
 
             FileInfo? previousFile = null;
