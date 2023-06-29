@@ -171,12 +171,17 @@ It doesn't make sense to include SIMPLE recovery model DBs for log shipping so t
 
 The log shipping service doesn't consider backups older than 14 days by default.  If you are initializing from disk this will prevent restoring a backup for an old database that was deleted.  It also prevents initializing from an old backup that will need a large amount of log files applied to bring it up-to-date.  If you need to restore from an older backup you can adjust **MaxBackupAgeForInitialization**.  
 
+If you need to adjust the file paths for the initial restore the **MoveDataFolder**, **MoveLogFolder** and **MoveFileStreamFolder** can be specified.  If possible it's best to keep the drive configuration and file paths identical between the log shipping primary and secondary.
+
 ```json
   "Config": {
       "PollForNewDatabasesFrequency" : 10,
       "ExcludedDatabases": ["LSExcluded1", "LSExcluded2"],
       "InitializeSimple": true,
-      "MaxBackupAgeForInitialization": 30
+      "MaxBackupAgeForInitialization": 30,
+      "MoveDataFolder": "D:\\Data",
+      "MoveLogFolder": "L:\\Log",
+      "MoveFileStreamFolder": "F:\\FileStream"
       //..
   }
 ```

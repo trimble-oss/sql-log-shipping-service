@@ -115,7 +115,9 @@ namespace LogShippingService
                 return;
             }
 
-            var restoreScript = DataHelper.GetRestoreDbScript(fullFiles, db, deviceType,true);
+            var moves = DataHelper.GetFileMoves(fullFiles, deviceType, Config.ConnectionString, Config.MoveDataFolder, Config.MoveLogFolder,
+                Config.MoveFileStreamFolder);
+            var restoreScript = DataHelper.GetRestoreDbScript(fullFiles, db, deviceType,true,moves);
             // Restore FULL
             DataHelper.ExecuteWithTiming(restoreScript, Config.ConnectionString);
 

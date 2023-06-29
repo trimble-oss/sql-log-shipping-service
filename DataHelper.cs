@@ -60,7 +60,8 @@ namespace LogShippingService
             return builder.ToString();
         }
 
-        public static string GetRestoreDbScript(List<string> files, string db, BackupHeader.DeviceTypes type,bool withThrowErrorIfExists)
+        public static string GetRestoreDbScript(List<string> files, string db, BackupHeader.DeviceTypes type,
+            bool withThrowErrorIfExists, Dictionary<string, string>? fileMoves=null)
         {
             var from = GetFromDisk(files, type);
             if (string.IsNullOrEmpty(from)) { return string.Empty; }
@@ -76,11 +77,46 @@ namespace LogShippingService
             }
             builder.AppendLine($"RESTORE DATABASE {db.SqlQuote()} ");
             builder.AppendLine(from);
-            builder.Append("WITH NORECOVERY");
+            builder.AppendLine("WITH NORECOVERY");
+            if (fileMoves is { Count: > 0 })
+            {
+                foreach (var fileMove in fileMoves)
+                {
+                    builder.AppendLine(",MOVE " + fileMove.Key.SqlSingleQuote() + " TO " + fileMove.Value.SqlSingleQuote());
+                }
+            }
             return builder.ToString();
         }
 
-        private static string GetFromDisk(List<string> files, BackupHeader.DeviceTypes type)
+        public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type,string connectionString,string? dataFolder,string? logFolder,string? fileStreamFolder)
+        {
+            Dictionary<string, string> fileMoves = new();
+            if(string.IsNullOrEmpty(dataFolder) && string.IsNullOrEmpty(logFolder) && string.IsNullOrEmpty(fileStreamFolder) ) { return fileMoves; }
+            var list = BackupFileListRow.GetFileList(files, connectionString, type);
+            foreach (var file in list)
+            {
+                var movePath = file.Type switch
+                {
+                    'L' => logFolder,
+                    'S' => fileStreamFolder,
+                    _ => dataFolder
+                };
+                if (!string.IsNullOrEmpty(movePath))
+                {
+                    fileMoves.Add(file.LogicalName, Path.Combine(movePath, file.FileName));
+                }
+            }
+            return fileMoves;
+        }
+
+        public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type)
+        {
+            return GetFileMoves(files, type, Config.ConnectionString, Config.MoveDataFolder, Config.MoveLogFolder,
+                Config.MoveFileStreamFolder);
+        }
+        
+
+            private static string GetFromDisk(List<string> files, BackupHeader.DeviceTypes type)
         {
             StringBuilder builder = new();
             var i = 0;

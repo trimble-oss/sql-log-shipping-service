@@ -82,7 +82,7 @@ namespace LogShippingService
 
             var fullHeader = lastFull.GetHeader(Config.ConnectionString);
 
-            lastFull.Restore(Config.ConnectionString);
+            lastFull.Restore();
 
             // Check if diff backup should be applied
             if (lastDiff.BackupFinishDate <= lastFull.BackupFinishDate) return;
@@ -90,7 +90,7 @@ namespace LogShippingService
             var diffHeader = lastDiff.GetHeader(Config.ConnectionString);
             if (diffHeader.BackupFinishDate > fullHeader.BackupFinishDate && fullHeader.FirstLSN == diffHeader.DifferentialBaseLSN)
             {
-                lastDiff.Restore(Config.ConnectionString);
+                lastDiff.Restore();
             }
         }
 

@@ -30,6 +30,9 @@ namespace LogShippingService
         public static string? DiffBackupPathTemplate;
         public static bool InitializeSimple;
         public static int MaxBackupAgeForInitialization;
+        public static string? MoveDataFolder;
+        public static string? MoveLogFolder;
+        public static string? MoveFileStreamFolder;
 
         static Config()
         {
@@ -100,6 +103,9 @@ namespace LogShippingService
                                                     throw new InvalidOperationException());
                 InitializeSimple = bool.Parse(configuration["Config:InitializeSimple"] ?? false.ToString());
                 MaxBackupAgeForInitialization = int.Parse(configuration["Config:MaxBackupAgeForInitialization"] ?? 14.ToString());
+                MoveDataFolder = configuration["Config:MoveDataFolder"];
+                MoveLogFolder = configuration["Config:MoveLogFolder"];
+                MoveFileStreamFolder= configuration["Config:MoveFileStreamFolder"];
             }
             catch (Exception ex)
             {
