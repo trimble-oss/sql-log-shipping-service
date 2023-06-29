@@ -25,23 +25,11 @@ namespace LogShippingService
             Log.Debug("Folders: {count}", folders.Count);
             Parallel.ForEach(folders,
                 new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
-                TryProcessDB
+                ProcessDB
             );
         }
-
-        private void TryProcessDB(string db)
-        {
-            try
-            {
-                ProcessDB(db);
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex,"Error initializing {db} from azure blob",db);
-            }
-        }
-
-        private void ProcessDB(string db)
+        
+        protected override void DoProcessDB(string db)
         {
             if (!IsValidForInitialization(db)) return;
             if(string.IsNullOrEmpty(Config.FullBackupPathTemplate)) return;
