@@ -34,22 +34,12 @@ namespace LogShippingService
                 dbFolder =>
                 {
                     var db = Path.GetFileName(dbFolder);
-                    if (IsStopRequested) return;
-                    try
-                    {
-                        ProcessDB(db);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error(ex, "Error initializing {db} from disk", db);
-                    }
+                    ProcessDB(db);
                 });
         }
 
-        private void ProcessDB(string db)
+        protected override void DoProcessDB(string db)
         {
-            if (!IsValidForInitialization(db)) return;
-
             var fullFolder = Config.FullBackupPathTemplate?.Replace(Config.DatabaseToken, db);
             var diffFolder = Config.DiffBackupPathTemplate?.Replace(Config.DatabaseToken, db);
             if (!Directory.Exists(fullFolder)) return;

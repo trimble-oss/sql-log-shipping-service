@@ -11,6 +11,33 @@ namespace LogShippingService
     {
         protected abstract void PollForNewDBs();
 
+        protected abstract void DoProcessDB(string db);
+
+        protected void ProcessDB(string db)
+        {
+            if (!IsValidForInitialization(db)) return;
+            if (IsStopRequested) return;
+            try
+            {
+                if (LogShipping.InitializingDBs.TryAdd(db.ToLower(), db)) // To prevent log restores until initialization is complete
+                {
+                    DoProcessDB(db);
+                }
+                else
+                {
+                    Log.Error("{db} is already initializing", db);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error initializing new database from backup {db}", db);
+            }
+            finally
+            {
+                LogShipping.InitializingDBs.TryRemove(db.ToLower(), out _); // Log restores can start after restore operations have completed
+            }
+        }
+
         protected List<DatabaseInfo>? DestinationDBs;
 
         public bool IsStopRequested;

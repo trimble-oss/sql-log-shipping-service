@@ -35,38 +35,17 @@ namespace LogShippingService
                 new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
                 newDb =>
                 {
-                    if (IsStopRequested) return;
-                    try
-                    {
-                        if (LogShipping.InitializingDBs.TryAdd(newDb.Name.ToLower(), newDb.Name)) // To prevent log restores until initialization is complete
-                        {
-                            ProcessDB(newDb.Name);
-                        }
-                        else
-                        {
-                            Log.Error("{db} is already initializing",newDb.Name);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error(ex, "Error initializing new database from backup {db}", newDb.Name);
-                    }
-                    finally
-                    {
-                        LogShipping.InitializingDBs.TryRemove(newDb.Name.ToLower(),out _); // Log restores can start after restore operations have completed
-                    }
+                      ProcessDB(newDb.Name);
                 });
         }
-
 
         /// <summary>
         /// Get the last FULL/DIFF backup for the database from msdb history & restore
         /// </summary>
         /// <param name="db">Database name</param>
-        private void ProcessDB(string db)
+        protected override void DoProcessDB(string db)
         {
             if (Config.SourceConnectionString == null) return;
-            if (!IsValidForInitialization(db)) return;
             Log.Information("Initializing new database: {db}", db);
             var lastFull = new LastBackup(db, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseFull );
             var lastDiff = new LastBackup(db, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseDiff );
