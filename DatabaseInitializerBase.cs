@@ -154,13 +154,23 @@ namespace LogShippingService
             var diffHeader =
                 BackupHeader.GetHeaders(diffFiles, Config.ConnectionString, deviceType);
 
-            if (diffHeader.Count>0 && diffHeader[0].DatabaseName == db &&
-                diffHeader[0].DifferentialBaseLSN == fullHeader[0].DifferentialBaseLSN)
+            if (IsDiffApplicable(fullHeader,diffHeader))
             {
                 // Restore DIFF is applicable
                 restoreScript = DataHelper.GetRestoreDbScript(diffFiles, db, deviceType,false);
                 DataHelper.ExecuteWithTiming(restoreScript, Config.ConnectionString);
             }
         }
+
+        public static bool IsDiffApplicable(List<BackupHeader> fullHeaders, List<BackupHeader> diffHeaders)
+        {
+            if (fullHeaders.Count == 1 && diffHeaders.Count == 1)
+            {
+                return IsDiffApplicable(fullHeaders[0], diffHeaders[0]);
+            }
+            return false;
+        }
+
+        public static bool IsDiffApplicable(BackupHeader full, BackupHeader diff)=> full.CheckpointLSN == diff.DifferentialBaseLSN && full.BackupSetGUID== diff.DifferentialBaseGUID;
     }
 }
