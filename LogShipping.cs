@@ -44,7 +44,15 @@ namespace LogShippingService
      
         public void Start()
         {
-            Task.Run(StartProcessing);
+            if (string.IsNullOrEmpty(Config.LogFilePathTemplate))
+            {
+                Log.Warning("LogFilePath was not specified.  Log restores won't be processed");
+                _isShutdown=true;
+            }
+            else
+            {
+                Task.Run(StartProcessing);
+            }
             if (_initializer != null)
             {
                 Task.Run(_initializer.RunPollForNewDBs);
@@ -367,7 +375,7 @@ namespace LogShippingService
  
         private static List<string> GetFilesForDb(string db, DateTime fromDate)
         {
-            var path = Config.LogFilePathTemplate.Replace(Config.DatabaseToken, db);
+            var path = Config.LogFilePathTemplate!.Replace(Config.DatabaseToken, db);
             List<string> logFiles;
             if (string.IsNullOrEmpty(Config.ContainerURL))
             {

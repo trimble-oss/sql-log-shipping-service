@@ -11,7 +11,7 @@ namespace LogShippingService
         public static readonly string? SASToken;
         public static readonly string ConnectionString;
         public static readonly int MaxThreads;
-        public static readonly string LogFilePathTemplate;
+        public static readonly string? LogFilePathTemplate;
         public static readonly int IterationDelayMs;
         public static readonly int OffSetMins;
         public static readonly int MaxProcessingTimeMins;
@@ -89,12 +89,12 @@ namespace LogShippingService
 
                 ConnectionString = configuration["Config:Destination"] ?? throw new InvalidOperationException();
                 MaxThreads = int.Parse(configuration["Config:MaxThreads"] ?? throw new InvalidOperationException());
-                LogFilePathTemplate = configuration["Config:LogFilePath"] ?? throw new InvalidOperationException();
+                LogFilePathTemplate = configuration["Config:LogFilePath"];
                 FullBackupPathTemplate = configuration["Config:FullFilePath"];
                 DiffBackupPathTemplate = configuration["Config:DiffFilePath"];
-                if (!LogFilePathTemplate.Contains(DatabaseToken))
+                if (LogFilePathTemplate !=null && !LogFilePathTemplate.Contains(DatabaseToken))
                 {
-                    throw new ValidationException($"LogFilePathTemplate should contain '{DatabaseToken}'");
+                    throw new ValidationException("LogFilePathTemplate should contain '{DatabaseToken}'");
                 }
                 IterationDelayMs = int.Parse(configuration["Config:DelayBetweenIterationsMs"] ??
                                                throw new InvalidOperationException());
