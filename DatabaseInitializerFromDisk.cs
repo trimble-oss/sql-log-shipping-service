@@ -59,7 +59,7 @@ namespace LogShippingService
             List<string> diffFiles = new();
             try
             {
-                fullFiles = GetFilesForLastBackup(fullFolder);
+                fullFiles = GetFilesForLastBackup(fullFolder, Config.ConnectionString);
                 if (fullFiles.Count == 0)
                 {
                     throw new Exception($"No backup files for {db} found in {fullFolder}");
@@ -75,7 +75,7 @@ namespace LogShippingService
             {
                 if (!string.IsNullOrEmpty(diffFolder) && Directory.Exists(diffFolder))
                 {
-                    diffFiles = GetFilesForLastBackup(diffFolder);
+                    diffFiles = GetFilesForLastBackup(diffFolder, Config.ConnectionString);
                     if (diffFiles.Count == 0)
                     {
                         Log.Warning("No DIFF backups files for {db} found in {diffFolder}",db,diffFolder);
@@ -95,7 +95,7 @@ namespace LogShippingService
             
         }
 
-        public static List<string> GetFilesForLastBackup(string folder)
+        public static List<string> GetFilesForLastBackup(string folder,string connectionString)
         {
             if (!Directory.Exists(folder)) throw new Exception($"GetFilesForLastBackup: Folder '{folder}' does not exist.");
             List<string> fileList = new();
@@ -107,16 +107,37 @@ namespace LogShippingService
                 .ToList();
 
             FileInfo? previousFile = null;
-            foreach (var file in files)
+            var backupSetGuid = Guid.Empty;
+            foreach (var file in files.TakeWhile(file => previousFile == null || file.LastWriteTime >= previousFile.LastWriteTime.AddMinutes(-60))) // Backups that are part of the same set should have similar last write time
             {
-                if (previousFile == null || previousFile.LastWriteTime == file.LastWriteTime)
+                try
                 {
-                    fileList.Add(file.FullName);
+                    var header =
+                        BackupHeader.GetHeaders(file.FullName, connectionString, BackupHeader.DeviceTypes.Disk);
+                    if (header is { Count: 1 })
+                    {
+                        var thisGUID = header[0].BackupSetGUID;
+                        if (backupSetGuid == Guid.Empty)
+                        {
+                            backupSetGuid = thisGUID; // First file in backup set
+                        }
+                        else if (backupSetGuid != thisGUID) 
+                        {
+                            break; // Belongs to a different backup set, exit loop
+                        }
+                    }
+                    else
+                    {
+                        throw new Exception($"Backup file contains multiple backups.");
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    break;
+                    Log.Error(ex,"Error reading backup header for {file}", file.FullName);
+                    continue;
                 }
+
+                fileList.Add(file.FullName);
                 previousFile = file;
             }
             return fileList;
