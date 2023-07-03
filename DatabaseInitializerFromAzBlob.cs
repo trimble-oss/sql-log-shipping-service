@@ -49,14 +49,14 @@ namespace LogShippingService
             var fullPrefix = Config.FullBackupPathTemplate.Replace(Config.DatabaseToken,db);
             var diffPrefix = Config.DiffBackupPathTemplate?.Replace(Config.DatabaseToken, db);
 
-            var fullFiles =  GetFilesForLastBackupAzBlob(fullPrefix);
-            var diffFiles = diffPrefix==null ? new List<string>() : GetFilesForLastBackupAzBlob(diffPrefix);
+            var fullFiles =  GetFilesForLastBackupAzBlob(fullPrefix,Config.ConnectionString);
+            var diffFiles = diffPrefix==null ? new List<string>() : GetFilesForLastBackupAzBlob(diffPrefix, Config.ConnectionString);
 
             ProcessRestore(db,fullFiles,diffFiles, BackupHeader.DeviceTypes.Url);
             
         }
 
-        public static List<string> GetFilesForLastBackupAzBlob(string prefix)
+        public static List<string> GetFilesForLastBackupAzBlob(string prefix,string connectionString)
         {
             var files = new List<string>();
             var containerUri = new Uri(Config.ContainerURL + Config.SASToken);
@@ -67,18 +67,41 @@ namespace LogShippingService
                 .Where(blobItem => blobItem.Properties.LastModified >
                                    DateTime.Now.AddDays(-Config.MaxBackupAgeForInitialization))
                 .OrderByDescending(blobItem => blobItem.Properties.LastModified);
-            DateTimeOffset? lastmod = null;
-            foreach (var blobItem in filteredBlobs)
+           
+            var backupSetGuid = Guid.Empty;
+            BlobItem? previousBlobItem=null;
+            foreach (var blobItem in filteredBlobs.TakeWhile(blobItem => previousBlobItem == null || blobItem.Properties.LastModified >= previousBlobItem.Properties.LastModified?.AddMinutes(-60))) // Backups that are part of the same set should have similar last write time
             {
-                if (lastmod == null || lastmod == blobItem.Properties.LastModified)
+                var fullPath = Config.ContainerURL + "/" + blobItem.Name;
+                try
                 {
-                    files.Add(Config.ContainerURL + "/" +  blobItem.Name);
+                    var header =
+                        BackupHeader.GetHeaders(fullPath, connectionString, BackupHeader.DeviceTypes.Url);
+                    if (header is { Count: 1 })
+                    {
+                        var thisGUID = header[0].BackupSetGUID;
+                        if (backupSetGuid == Guid.Empty)
+                        {
+                            backupSetGuid = thisGUID; // First file in backup set
+                        }
+                        else if (backupSetGuid != thisGUID)
+                        {
+                            break; // Belongs to a different backup set, exit loop
+                        }
+                    }
+                    else
+                    {
+                        throw new Exception($"Backup file contains multiple backups.");
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-                    break;
+                    Log.Error(ex, "Error reading backup header for {file}", fullPath);
+                    continue;
                 }
-                lastmod = blobItem.Properties.LastModified;
+
+                files.Add(fullPath);
+                previousBlobItem = blobItem;
             }
             return files;
         }
