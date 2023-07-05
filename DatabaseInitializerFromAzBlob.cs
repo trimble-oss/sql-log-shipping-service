@@ -48,15 +48,35 @@ namespace LogShippingService
 
             var fullPrefix = Config.FullBackupPathTemplate.Replace(Config.DatabaseToken,db);
             var diffPrefix = Config.DiffBackupPathTemplate?.Replace(Config.DatabaseToken, db);
-
-            var fullFiles =  GetFilesForLastBackupAzBlob(fullPrefix,Config.ConnectionString);
-            var diffFiles = diffPrefix==null ? new List<string>() : GetFilesForLastBackupAzBlob(diffPrefix, Config.ConnectionString);
+            var isPartial = false;
+            var fullFiles =  GetFilesForLastBackupAzBlob(fullPrefix,Config.ConnectionString,db, BackupHeader.BackupTypes.DatabaseFull);
+            if (fullFiles.Count == 0)
+            {
+                Log.Information("No full backups found for {db}.  Checking for partial backups.", db);
+                fullFiles = GetFilesForLastBackupAzBlob(fullPrefix, Config.ConnectionString, db, BackupHeader.BackupTypes.Partial);
+                if (fullFiles.Count == 0)
+                {
+                    throw new Exception($"No backup files for {db} found in {fullPrefix}");
+                }
+                else
+                {
+                    var files = BackupFileListRow.GetFileList(fullFiles, Config.ConnectionString,
+                        BackupHeader.DeviceTypes.Url);
+                    if (files.All(f => f.FileGroupID != 1))
+                    {
+                        throw new Exception($"Partial backup for {db} does not include PRIMARY filegroup.");
+                    }
+                    Log.Warning("Restoring {db} from PARTIAL backup.", db);
+                    isPartial = true;
+                }
+            }
+            var diffFiles = diffPrefix==null ? new List<string>() : GetFilesForLastBackupAzBlob(diffPrefix, Config.ConnectionString, db, isPartial ? BackupHeader.BackupTypes.PartialDiff : BackupHeader.BackupTypes.DatabaseDiff);
 
             ProcessRestore(db,fullFiles,diffFiles, BackupHeader.DeviceTypes.Url);
             
         }
 
-        public static List<string> GetFilesForLastBackupAzBlob(string prefix,string connectionString)
+        public static List<string> GetFilesForLastBackupAzBlob(string prefix,string connectionString, string db, BackupHeader.BackupTypes type)
         {
             var files = new List<string>();
             var containerUri = new Uri(Config.ContainerURL + Config.SASToken);
@@ -77,21 +97,10 @@ namespace LogShippingService
                 {
                     var header =
                         BackupHeader.GetHeaders(fullPath, connectionString, BackupHeader.DeviceTypes.Url);
-                    if (header is { Count: 1 })
+                    if (ValidateHeader(header, db, type, ref backupSetGuid, fullPath))
                     {
-                        var thisGUID = header[0].BackupSetGUID;
-                        if (backupSetGuid == Guid.Empty)
-                        {
-                            backupSetGuid = thisGUID; // First file in backup set
-                        }
-                        else if (backupSetGuid != thisGUID)
-                        {
-                            break; // Belongs to a different backup set, exit loop
-                        }
-                    }
-                    else
-                    {
-                        throw new Exception($"Backup file contains multiple backups.");
+                        files.Add(fullPath);
+                        previousBlobItem = blobItem;
                     }
                 }
                 catch (Exception ex)
@@ -99,9 +108,6 @@ namespace LogShippingService
                     Log.Error(ex, "Error reading backup header for {file}", fullPath);
                     continue;
                 }
-
-                files.Add(fullPath);
-                previousBlobItem = blobItem;
             }
             return files;
         }

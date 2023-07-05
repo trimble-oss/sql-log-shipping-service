@@ -1,9 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using Serilog;
+﻿using Serilog;
+using static LogShippingService.BackupHeader;
+using System.Reflection.PortableExecutable;
 
 namespace LogShippingService
 {
@@ -63,8 +60,7 @@ namespace LogShippingService
 
         public bool IsStopped { get; private set; }
 
-        public abstract bool IsValidated { get;}
-
+        public abstract bool IsValidated { get; }
 
         public bool IsValidForInitialization(string db)
         {
@@ -103,7 +99,7 @@ namespace LogShippingService
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(ex,"Error running poll for new DBs");
+                    Log.Error(ex, "Error running poll for new DBs");
                 }
 
                 var nextIterationStart = DateTime.Now.AddMinutes(Config.PollForNewDatabasesFrequency);
@@ -119,8 +115,8 @@ namespace LogShippingService
 
         protected static void ProcessRestore(string db, List<string> fullFiles, List<string> diffFiles, BackupHeader.DeviceTypes deviceType)
         {
-
             var fullHeader = BackupHeader.GetHeaders(fullFiles, Config.ConnectionString, deviceType);
+
             if (fullHeader.Count > 1)
             {
                 Log.Error("Backup header returned multiple rows");
@@ -141,10 +137,18 @@ namespace LogShippingService
                 Log.Warning("Skipping initialization of {db} due to SIMPLE recovery model. InitializeSimple can be set to alter this behaviour for disaster recovery purposes.", db);
                 return;
             }
+            else if (fullHeader[0].BackupType is not (BackupHeader.BackupTypes.DatabaseFull or BackupHeader.BackupTypes.Partial))
+            {
+                Log.Error("Unexpected backup type {type}. {fullFiles}", fullHeader[0].BackupType, fullFiles);
+            }
+            if (fullHeader[0].BackupType == BackupHeader.BackupTypes.Partial)
+            {
+                Log.Warning("Warning. Initializing from a PARTIAL backup. Additional steps will be required to restore READONLY filegroups. {fullFiles}", fullFiles);
+            }
 
             var moves = DataHelper.GetFileMoves(fullFiles, deviceType, Config.ConnectionString, Config.MoveDataFolder, Config.MoveLogFolder,
                 Config.MoveFileStreamFolder);
-            var restoreScript = DataHelper.GetRestoreDbScript(fullFiles, db, deviceType,true,moves);
+            var restoreScript = DataHelper.GetRestoreDbScript(fullFiles, db, deviceType, true, moves);
             // Restore FULL
             DataHelper.ExecuteWithTiming(restoreScript, Config.ConnectionString);
 
@@ -154,10 +158,10 @@ namespace LogShippingService
             var diffHeader =
                 BackupHeader.GetHeaders(diffFiles, Config.ConnectionString, deviceType);
 
-            if (IsDiffApplicable(fullHeader,diffHeader))
+            if (IsDiffApplicable(fullHeader, diffHeader))
             {
                 // Restore DIFF is applicable
-                restoreScript = DataHelper.GetRestoreDbScript(diffFiles, db, deviceType,false);
+                restoreScript = DataHelper.GetRestoreDbScript(diffFiles, db, deviceType, false);
                 DataHelper.ExecuteWithTiming(restoreScript, Config.ConnectionString);
             }
         }
@@ -171,6 +175,42 @@ namespace LogShippingService
             return false;
         }
 
-        public static bool IsDiffApplicable(BackupHeader full, BackupHeader diff)=> full.CheckpointLSN == diff.DifferentialBaseLSN && full.BackupSetGUID== diff.DifferentialBaseGUID;
+        public static bool IsDiffApplicable(BackupHeader full, BackupHeader diff) => full.CheckpointLSN == diff.DifferentialBaseLSN && full.BackupSetGUID == diff.DifferentialBaseGUID && diff.BackupType is BackupHeader.BackupTypes.DatabaseDiff or BackupHeader.BackupTypes.PartialDiff;
+
+
+        protected static bool ValidateHeader(List<BackupHeader> headers,string db, BackupTypes backupType,ref Guid backupSetGuid,string filePath)
+        {
+            if (headers is { Count: 1 })
+            {
+                var header = headers[0];
+                if (!string.Equals(header.DatabaseName, db, StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Warning("Skipping {file}.  Backup is for {HeaderDB}.  Expected {ExpectedDB}", filePath, header.DatabaseName, db);
+                    return false;
+                }
+
+                if (header.BackupType != backupType)
+                {
+                    Log.Warning("Skipping {file} for {db}.  Backup type is {BackupType}.  Expected {ExpectedBackupType}", filePath, db, header.BackupType, backupType);
+                    return false;
+                }
+                var thisGUID = header.BackupSetGUID;
+                if (backupSetGuid == Guid.Empty)
+                {
+                    backupSetGuid = thisGUID; // First file in backup set
+                }
+                else if (backupSetGuid != thisGUID)
+                {
+                    return false; // Belongs to a different backup set
+                }
+                return true;
+            }
+            else
+            {
+                Log.Warning($"Backup file contains multiple backups and will be skipped. {filePath}");
+                return false;
+            }
+        }
+
     }
 }
