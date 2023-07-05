@@ -1,18 +1,9 @@
 ﻿using Serilog;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Reflection.Metadata.Ecma335;
-using System.Text;
-using System.Threading.Tasks;
-using Microsoft.Data.SqlClient;
 
 namespace LogShippingService
 {
-    public class DatabaseInitializerFromDisk: DatabaseInitializerBase
+    public class DatabaseInitializerFromDisk : DatabaseInitializerBase
     {
-     
-
         public override bool IsValidated
         {
             get
@@ -38,7 +29,6 @@ namespace LogShippingService
             }
             else
             {
-
                 Parallel.ForEach(System.IO.Directory.EnumerateDirectories(dbRoot),
                     new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
                     dbFolder =>
@@ -55,14 +45,32 @@ namespace LogShippingService
             var diffFolder = Config.DiffBackupPathTemplate?.Replace(Config.DatabaseToken, db);
             if (!Directory.Exists(fullFolder)) return;
 
+            var isPartial = false;
             List<string> fullFiles;
             List<string> diffFiles = new();
             try
             {
-                fullFiles = GetFilesForLastBackup(fullFolder, Config.ConnectionString);
+                fullFiles = GetFilesForLastBackup(fullFolder, Config.ConnectionString, db, BackupHeader.BackupTypes.DatabaseFull);
                 if (fullFiles.Count == 0)
                 {
-                    throw new Exception($"No backup files for {db} found in {fullFolder}");
+                    Log.Information("No full backups found for {db}.  Checking for partial backups.", db);
+                    fullFiles = GetFilesForLastBackup(fullFolder, Config.ConnectionString, db, BackupHeader.BackupTypes.Partial);
+
+                    if (fullFiles.Count == 0)
+                    {
+                        throw new Exception($"No backup files for {db} found in {fullFolder}");
+                    }
+                    else
+                    {
+                        var files = BackupFileListRow.GetFileList(fullFiles, Config.ConnectionString,
+                            BackupHeader.DeviceTypes.Disk);
+                        if (files.All(f => f.FileGroupID != 1))
+                        {
+                            throw new Exception($"Partial backup for {db} does not include PRIMARY filegroup.");
+                        }
+                        Log.Warning("Restoring {db} from PARTIAL backup.", db);
+                        isPartial = true;
+                    }
                 }
             }
             catch (Exception ex)
@@ -75,10 +83,10 @@ namespace LogShippingService
             {
                 if (!string.IsNullOrEmpty(diffFolder) && Directory.Exists(diffFolder))
                 {
-                    diffFiles = GetFilesForLastBackup(diffFolder, Config.ConnectionString);
+                    diffFiles = GetFilesForLastBackup(diffFolder, Config.ConnectionString, db, isPartial ? BackupHeader.BackupTypes.PartialDiff : BackupHeader.BackupTypes.DatabaseDiff);
                     if (diffFiles.Count == 0)
                     {
-                        Log.Warning("No DIFF backups files for {db} found in {diffFolder}",db,diffFolder);
+                        Log.Warning("No DIFF backups files for {db} found in {diffFolder}", db, diffFolder);
                     }
                 }
                 else
@@ -91,11 +99,10 @@ namespace LogShippingService
                 Log.Warning(ex, "Error getting files for last DIFF backup for {db} in {diffFolder}. ", db, diffFolder);
             }
 
-            ProcessRestore(db,fullFiles,diffFiles, BackupHeader.DeviceTypes.Disk);
-            
+            ProcessRestore(db, fullFiles, diffFiles, BackupHeader.DeviceTypes.Disk);
         }
 
-        public static List<string> GetFilesForLastBackup(string folder,string connectionString)
+        public static List<string> GetFilesForLastBackup(string folder, string connectionString, string db, BackupHeader.BackupTypes backupType)
         {
             if (!Directory.Exists(folder)) throw new Exception($"GetFilesForLastBackup: Folder '{folder}' does not exist.");
             List<string> fileList = new();
@@ -112,36 +119,19 @@ namespace LogShippingService
             {
                 try
                 {
-                    var header =
+                    var headers =
                         BackupHeader.GetHeaders(file.FullName, connectionString, BackupHeader.DeviceTypes.Disk);
-                    if (header is { Count: 1 })
-                    {
-                        var thisGUID = header[0].BackupSetGUID;
-                        if (backupSetGuid == Guid.Empty)
-                        {
-                            backupSetGuid = thisGUID; // First file in backup set
-                        }
-                        else if (backupSetGuid != thisGUID) 
-                        {
-                            break; // Belongs to a different backup set, exit loop
-                        }
-                    }
-                    else
-                    {
-                        throw new Exception($"Backup file contains multiple backups.");
-                    }
+                    if (!ValidateHeader(headers, db, backupType, ref backupSetGuid, file.FullName)) continue;
+                    fileList.Add(file.FullName);
+                    previousFile = file;
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(ex,"Error reading backup header for {file}", file.FullName);
+                    Log.Error(ex, "Error reading backup header for {file}", file.FullName);
                     continue;
                 }
-
-                fileList.Add(file.FullName);
-                previousFile = file;
             }
             return fileList;
         }
-
     }
 }
