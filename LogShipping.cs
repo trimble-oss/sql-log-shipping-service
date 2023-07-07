@@ -400,6 +400,7 @@ namespace LogShippingService
             var files = new DirectoryInfo(path)
                 .GetFiles("*.trn", SearchOption.AllDirectories)
                 .Where(file => file.LastWriteTime > fromDate)
+                .OrderBy(f=>f.LastAccessTime)
                 .Select(file => file.FullName)
                 .ToList();
 
