@@ -161,6 +161,23 @@ To initialize from azure blob you need to specify **FullFilePath** and **DiffFil
 
 If you backup to multiple files, files with the same modified date are treated as part of the same backup set.  This avoids having to parse the file name and allows for different file naming formats.
 
+### Partial Backups and READONLY filegroups
+
+Log Shipping can be initialized from PARTIAL backups.  Partial backups are backups created using the **READ_WRITE_FILEGROUPS** option.  This excludes any READONLY filegroups which you need to create separate backups for. Specify the location of your READONLY backups using **ReadOnlyFilePath**.   By default all filegroups will be required before a restore operation is attempted. If you want the RESTORE to proceed without all the READONLY filegroups, set **RecoverPartialBackupWithoutReadOnly** option to **true** (**ReadOnlyFilePath** can be omitted if **true**). 
+
+```json
+  "Config": {
+    "LogFilePath": "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\LOG",
+    "FullFilePath": "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\FULL",
+    "DiffFilePath": "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\DIFF",
+    "ReadOnlyFilePath": "\\\\BACKUPSERVER\\Backups\\SERVERNAME\\{DatabaseName}\\READONLY",
+    "RecoverPartialBackupWithoutReadOnly": false
+    //...
+  }
+```
+
+Note: If you are using PARTIAL backups, check sys.master_files for any files in the RECOVERY_PENDING state.  These files will need to be recovered.
+
 ### Other options for initialization
 
 You can adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min).  
