@@ -1,19 +1,14 @@
 ﻿using Microsoft.Data.SqlClient;
-using System;
-using System.Collections.Generic;
+using SerilogTimings;
 using System.Data;
-using System.Linq;
 using System.Numerics;
 using System.Text;
-using System.Threading.Tasks;
-using SerilogTimings;
 
 namespace LogShippingService
 {
     public class DataHelper
     {
-
-        public static DataTable GetDataTable(string sql,string connectionString)
+        public static DataTable GetDataTable(string sql, string connectionString)
         {
             using var cn = new SqlConnection(connectionString);
             using var cmd = new SqlCommand(sql, cn) { CommandTimeout = 0 };
@@ -23,7 +18,7 @@ namespace LogShippingService
             return dt;
         }
 
-        public static void Execute(string sql,string connectionString)
+        public static void Execute(string sql, string connectionString)
         {
             using var cn = new SqlConnection(connectionString);
             using var cmd = new SqlCommand(sql, cn) { CommandTimeout = 0 };
@@ -35,7 +30,7 @@ namespace LogShippingService
         {
             using (var op = Operation.Begin(sql))
             {
-                Execute(sql,connectionString);
+                Execute(sql, connectionString);
                 op.Complete();
             }
         }
@@ -61,7 +56,7 @@ namespace LogShippingService
         }
 
         public static string GetRestoreDbScript(List<string> files, string db, BackupHeader.DeviceTypes type,
-            bool withThrowErrorIfExists, Dictionary<string, string>? fileMoves=null)
+            bool withThrowErrorIfExists, Dictionary<string, string>? fileMoves = null)
         {
             var from = GetFromDisk(files, type);
             if (string.IsNullOrEmpty(from)) { return string.Empty; }
@@ -88,10 +83,10 @@ namespace LogShippingService
             return builder.ToString();
         }
 
-        public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type,string connectionString,string? dataFolder,string? logFolder,string? fileStreamFolder)
+        public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type, string connectionString, string? dataFolder, string? logFolder, string? fileStreamFolder)
         {
             Dictionary<string, string> fileMoves = new();
-            if(string.IsNullOrEmpty(dataFolder) && string.IsNullOrEmpty(logFolder) && string.IsNullOrEmpty(fileStreamFolder) ) { return fileMoves; }
+            if (string.IsNullOrEmpty(dataFolder) && string.IsNullOrEmpty(logFolder) && string.IsNullOrEmpty(fileStreamFolder)) { return fileMoves; }
             var list = BackupFileListRow.GetFileList(files, connectionString, type);
             foreach (var file in list)
             {
@@ -114,9 +109,8 @@ namespace LogShippingService
             return GetFileMoves(files, type, Config.ConnectionString, Config.MoveDataFolder, Config.MoveLogFolder,
                 Config.MoveFileStreamFolder);
         }
-        
 
-            private static string GetFromDisk(List<string> files, BackupHeader.DeviceTypes type)
+        public static string GetFromDisk(List<string> files, BackupHeader.DeviceTypes type)
         {
             StringBuilder builder = new();
             var i = 0;
@@ -132,9 +126,11 @@ namespace LogShippingService
                     case BackupHeader.DeviceTypes.Disk:
                         builder.Append($"DISK = N{file.SqlSingleQuote()}");
                         break;
+
                     case BackupHeader.DeviceTypes.Url:
                         builder.Append($"URL = N{file.SqlSingleQuote()}");
                         break;
+
                     default:
                         throw new ArgumentException("Invalid DeviceType");
                 }

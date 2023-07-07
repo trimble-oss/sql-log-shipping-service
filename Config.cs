@@ -33,6 +33,8 @@ namespace LogShippingService
         public static string? MoveDataFolder;
         public static string? MoveLogFolder;
         public static string? MoveFileStreamFolder;
+        public static string? ReadOnlyPartialBackupPathTemplate;
+        public static bool RecoverPartialBackupWithoutReadOnly;
 
         static Config()
         {
@@ -92,7 +94,8 @@ namespace LogShippingService
                 LogFilePathTemplate = configuration["Config:LogFilePath"];
                 FullBackupPathTemplate = configuration["Config:FullFilePath"];
                 DiffBackupPathTemplate = configuration["Config:DiffFilePath"];
-                if (LogFilePathTemplate !=null && !LogFilePathTemplate.Contains(DatabaseToken))
+                ReadOnlyPartialBackupPathTemplate = configuration["Config:ReadOnlyFilePath"];
+                if (LogFilePathTemplate != null && !LogFilePathTemplate.Contains(DatabaseToken))
                 {
                     throw new ValidationException("LogFilePathTemplate should contain '{DatabaseToken}'");
                 }
@@ -105,7 +108,8 @@ namespace LogShippingService
                 MaxBackupAgeForInitialization = int.Parse(configuration["Config:MaxBackupAgeForInitialization"] ?? 14.ToString());
                 MoveDataFolder = configuration["Config:MoveDataFolder"];
                 MoveLogFolder = configuration["Config:MoveLogFolder"];
-                MoveFileStreamFolder= configuration["Config:MoveFileStreamFolder"];
+                MoveFileStreamFolder = configuration["Config:MoveFileStreamFolder"];
+                RecoverPartialBackupWithoutReadOnly = bool.Parse(configuration["Config:RecoverPartialBackupWithoutReadOnly"] ?? false.ToString());
             }
             catch (Exception ex)
             {

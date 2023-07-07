@@ -25,7 +25,7 @@ namespace LogShippingService
         protected override void PollForNewDBs()
         {
             List<DatabaseInfo> newDBs;
-            using (Operation.Time("PollForNewDBs"))
+            using (Operation.Time("Polling for new databases using msdb history"))
             {
                 newDBs = GetNewDatabases();
             }

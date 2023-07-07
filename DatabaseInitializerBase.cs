@@ -1,6 +1,7 @@
 ﻿using Serilog;
 using static LogShippingService.BackupHeader;
 using System.Reflection.PortableExecutable;
+using SerilogTimings;
 
 namespace LogShippingService
 {
@@ -95,7 +96,11 @@ namespace LogShippingService
                 }
                 try
                 {
-                    PollForNewDBs();
+                    using (var op = Operation.Begin("Initialize new databases"))
+                    {
+                        PollForNewDBs();
+                        op.Complete();
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -143,7 +148,7 @@ namespace LogShippingService
             }
             if (fullHeader[0].BackupType == BackupHeader.BackupTypes.Partial)
             {
-                Log.Warning("Warning. Initializing from a PARTIAL backup. Additional steps will be required to restore READONLY filegroups. {fullFiles}", fullFiles);
+                Log.Warning("Warning. Initializing {db} from a PARTIAL backup. Additional steps might be required to restore READONLY filegroups.  Check sys.master_files to ensure no files are in RECOVERY_PENDING state.", db);
             }
 
             var moves = DataHelper.GetFileMoves(fullFiles, deviceType, Config.ConnectionString, Config.MoveDataFolder, Config.MoveLogFolder,
@@ -178,20 +183,20 @@ namespace LogShippingService
         public static bool IsDiffApplicable(BackupHeader full, BackupHeader diff) => full.CheckpointLSN == diff.DifferentialBaseLSN && full.BackupSetGUID == diff.DifferentialBaseGUID && diff.BackupType is BackupHeader.BackupTypes.DatabaseDiff or BackupHeader.BackupTypes.PartialDiff;
 
 
-        protected static bool ValidateHeader(List<BackupHeader> headers,string db, BackupTypes backupType,ref Guid backupSetGuid,string filePath)
+        protected static bool ValidateHeader(BackupFile file,string db,ref Guid backupSetGuid, BackupTypes backupType)
         {
-            if (headers is { Count: 1 })
+            if (file.Headers is { Count: 1 })
             {
-                var header = headers[0];
+                var header = file.FirstHeader;
                 if (!string.Equals(header.DatabaseName, db, StringComparison.OrdinalIgnoreCase))
                 {
-                    Log.Warning("Skipping {file}.  Backup is for {HeaderDB}.  Expected {ExpectedDB}", filePath, header.DatabaseName, db);
+                    Log.Warning("Skipping {file}.  Backup is for {HeaderDB}.  Expected {ExpectedDB}", file.FilePath, header.DatabaseName, db);
                     return false;
                 }
 
                 if (header.BackupType != backupType)
                 {
-                    Log.Warning("Skipping {file} for {db}.  Backup type is {BackupType}.  Expected {ExpectedBackupType}", filePath, db, header.BackupType, backupType);
+                    Log.Warning("Skipping {file} for {db}.  Backup type is {BackupType}.  Expected {ExpectedBackupType}", file.FilePath, db, header.BackupType, backupType);
                     return false;
                 }
                 var thisGUID = header.BackupSetGUID;
@@ -207,7 +212,7 @@ namespace LogShippingService
             }
             else
             {
-                Log.Warning($"Backup file contains multiple backups and will be skipped. {filePath}");
+                Log.Warning($"Backup file contains multiple backups and will be skipped. {file.FilePath}");
                 return false;
             }
         }

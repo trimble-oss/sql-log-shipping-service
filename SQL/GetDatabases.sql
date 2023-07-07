@@ -6,6 +6,7 @@
 	FROM msdb.dbo.restorehistory rh
 	JOIN msdb.dbo.backupset bs on rh.backup_set_id = bs.backup_set_id
 	WHERE rh.restore_date > DATEADD(d,-14,GETUTCDATE())
+	AND bs.type IN('D','I','L','P','Q')
 
 )
 SELECT d.name,
