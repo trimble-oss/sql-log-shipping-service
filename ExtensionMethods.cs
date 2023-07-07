@@ -1,12 +1,12 @@
 ﻿namespace LogShippingService
 {
-    internal static class ExtensionMethods
+    public static class ExtensionMethods
     {
-
         public static string SqlSingleQuote(this string str)
         {
             return "'" + str.Replace("'", "''") + "'";
         }
+
         public static string SqlQuote(this string str)
         {
             return "[" + str.Replace("]", "]]") + "]";
@@ -37,5 +37,9 @@
             };
         }
 
+        public static List<string> GetFileList(this List<BackupFile> backupFiles)
+        {
+            return backupFiles.Select(f => f.FilePath).ToList();
+        }
     }
 }

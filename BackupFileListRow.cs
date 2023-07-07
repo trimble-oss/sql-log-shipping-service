@@ -1,15 +1,9 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Data;
-using System.Linq;
+﻿using System.Data;
 using System.Numerics;
-using System.Reflection.PortableExecutable;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace LogShippingService
 {
-    internal class BackupFileListRow
+    public class BackupFileListRow
     {
         public string LogicalName { get; set; }
         public string PhysicalName { get; set; }
@@ -87,17 +81,20 @@ namespace LogShippingService
             }
         }
 
+        public static List<BackupFileListRow> GetFileList(string backupFile, string connectionString,
+            BackupHeader.DeviceTypes deviceType) =>
+            GetFileList(new List<string>() { backupFile }, connectionString, deviceType);
+
         public static List<BackupFileListRow> GetFileList(List<string> backupFiles, string connectionString, BackupHeader.DeviceTypes deviceType)
         {
             List<BackupFileListRow> fileList = new();
             var sql = DataHelper.GetFileListOnlyScript(backupFiles, deviceType);
-            var dt = DataHelper.GetDataTable(sql,connectionString);
+            var dt = DataHelper.GetDataTable(sql, connectionString);
             foreach (DataRow row in dt.Rows)
             {
                 fileList.Add(new BackupFileListRow(row));
             }
             return fileList;
         }
-
     }
 }
