@@ -232,7 +232,7 @@ namespace LogShippingService
                     }
                     header = headers[0];
 
-                    if (header.DatabaseName != db)
+                    if (!string.Equals(header.DatabaseName, db, StringComparison.OrdinalIgnoreCase))
                     {
                         throw new HeaderVerificationException(
                             $"Header verification failed for {logPath}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
