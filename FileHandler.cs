@@ -44,7 +44,7 @@ namespace LogShippingService
                 var dbRoot = Config.FullBackupPathTemplate[
                     ..Config.FullBackupPathTemplate.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
                 Log.Information("Polling for new databases from disk.  Folders in path: {path}",dbRoot);
-                return System.IO.Directory.EnumerateDirectories(dbRoot);
+                return System.IO.Directory.EnumerateDirectories(dbRoot).Select(Path.GetFileName)!;
             }
             else
             {
