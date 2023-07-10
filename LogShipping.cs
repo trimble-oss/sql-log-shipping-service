@@ -381,7 +381,7 @@ namespace LogShippingService
                            fromDate, Config.OffSetMins, path))
                 {
                     logFiles = GetFilesForDbUnc(path, fromDate);
-                    op.Complete("FileCount", logFiles.Count);
+                    op.Complete();
                 }
             }
             else
@@ -389,7 +389,7 @@ namespace LogShippingService
                 using (var op = Operation.Begin("Query Azure Blob for {DatabaseName} after {date} (Offset:{offset}):{prefix}", db, fromDate, Config.OffSetMins, path))
                 {
                     logFiles = GetFilesForDbAzBlob(path, fromDate);
-                    op.Complete("FileCount", logFiles.Count);
+                    op.Complete();
                 }
             }
             return logFiles;
