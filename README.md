@@ -46,7 +46,7 @@ The SASToken value will be encrypted with the machine key when the service start
 
 * Install as a service
 
-You need a Windows account with appropriate permissions to do the log restores.  A group managed service account is a good option as it avoids the need to manage passwords.  The installation command looks like this:
+You need a Windows account with appropriate [permissions](#permissions) to do the log restores.  A group managed service account is a good option as it avoids the need to manage passwords.  The installation command looks like this:
 
 `LogShippingService.exe install -username "DOMAIN\GMSA$" -password ""`
 
@@ -59,6 +59,28 @@ The $ symbol is added for group managed service accounts and we also just use a 
 * Review the log
 
 The "Logs" folder contains a log of what the service is doing.
+
+## Permissions
+
+The service account requires the following permissions:
+
+* **dbcreator** Role membership
+* **VIEW SERVER STATE**
+
+```powershell
+# Grant permissions using dbatools.  
+# Replace DOMAIN\YOURUSER, adding a $ to the end of the username if using a managed service account.
+# Run locally or replace LOCALHOST with the name of the server
+Add-DbaServerRoleMember -SqlInstance  LOCALHOST -ServerRole dbcreator -Login DOMAIN\YOURUSER
+Invoke-DbaQuery -SqlInstance LOCALHOST -Query "GRANT VIEW SERVER STATE TO [DOMAIN\YOURUSER]"
+```
+
+Additionally the service also requires: 
+
+* File system permissions to write to application folder (To write to Logs folder.)
+* File system permissions to list backup files (if using a unc path instead of azure blob)
+
+*The service account running SQL also requires access to read the backup files*
 
 ## Standby
 
