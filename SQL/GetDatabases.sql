@@ -19,7 +19,7 @@ AND d.recovery_model <> 3 /* Exclude Simple */
 /* Exclude databases with a restore in progress */
 AND NOT EXISTS(	SELECT 1 
 				FROM sys.dm_exec_requests R
-				JOIN sys.dm_tran_locks L ON R.session_id = l.request_session_id
+				JOIN sys.dm_tran_locks L ON R.session_id = L.request_session_id
 				WHERE R.command='RESTORE DATABASE'
 				AND L.request_mode='X'
 				AND L.resource_type='DATABASE'
