@@ -66,13 +66,14 @@ The service account requires the following permissions:
 
 * **dbcreator** Role membership
 * **VIEW SERVER STATE**
+* **CONNECT ANY DATABASE**.  Required if you are using STANDBY option with 'KillUserConnections'.
 
 ```powershell
 # Grant permissions using dbatools.  
 # Replace DOMAIN\YOURUSER, adding a $ to the end of the username if using a managed service account.
 # Run locally or replace LOCALHOST with the name of the server
 Add-DbaServerRoleMember -SqlInstance  LOCALHOST -ServerRole dbcreator -Login DOMAIN\YOURUSER
-Invoke-DbaQuery -SqlInstance LOCALHOST -Query "GRANT VIEW SERVER STATE TO [DOMAIN\YOURUSER]"
+Invoke-DbaQuery -SqlInstance LOCALHOST -Query "GRANT VIEW SERVER STATE TO [DOMAIN\YOURUSER];GRANT CONNECT ANY DATABASE TO [DOMAIN\YOURUSER]"
 ```
 
 Additionally the service also requires: 
