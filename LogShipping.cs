@@ -206,6 +206,22 @@ namespace LogShippingService
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
             foreach (var logPath in logFiles)
             {
+                if (DateTime.Now > maxTime)
+                {
+                    // Stop processing logs if max processing time is exceeded. Prevents a single DatabaseName that has fallen behind from impacting other DBs
+                    throw new TimeoutException("Max processing time exceeded");
+                }
+                if (_isStopRequested)
+                {
+                    Log.Information("Halt log restores for {db} due to stop request", db);
+                    break;
+                }
+                if (!Waiter.CanRestoreLogsNow)
+                {
+                    Log.Information("Halt log restores for {db} due to Hours configuration", db);
+                    break;
+                }
+
                 var file = logPath.SqlSingleQuote();
                 var urlOrDisk = string.IsNullOrEmpty(Config.ContainerURL) ? "DISK" : "URL";
                 var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY";
@@ -288,23 +304,6 @@ namespace LogShippingService
                     }
                 }
 
-                if (DateTime.Now > maxTime)
-                {
-                    // Stop processing logs if max processing time is exceeded. Prevents a single DatabaseName that has fallen behind from impacting other DBs
-                    throw new TimeoutException("Max processing time exceeded");
-                }
-
-                if (_isStopRequested)
-                {
-                    Log.Information("Halt log restores for {db} due to stop request", db);
-                    break;
-                }
-
-                if (!Waiter.CanRestoreLogsNow)
-                {
-                    Log.Information("Halt log restores for {db} due to Hours configuration", db);
-                    break;
-                }
 
                 if (header != null)
                 {
