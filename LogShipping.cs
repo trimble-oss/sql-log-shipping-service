@@ -320,6 +320,7 @@ namespace LogShippingService
                 var sql = $"IF DATABASEPROPERTYEX({db.SqlSingleQuote()},'IsInStandBy')=1\n";
                 sql += "BEGIN\n";
                 sql += $"\tALTER DATABASE {db.SqlQuote()} SET SINGLE_USER WITH ROLLBACK AFTER {Config.KillUserConnectionsWithRollBackAfter}\n";
+                sql += $"\tRESTORE DATABASE {db.SqlQuote()} WITH NORECOVERY\n";
                 sql += "END\n";
                 Log.Warning("User connections to {db} are preventing restore operations.  Sessions will be killed after {seconds}. {sql}", db, Config.KillUserConnectionsWithRollBackAfter, sql);
                 try
