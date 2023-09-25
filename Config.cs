@@ -69,6 +69,11 @@ namespace LogShippingService
                 }
                 if (!string.IsNullOrEmpty(SASToken) && !EncryptionHelper.IsEncrypted(SASToken))
                 {
+                    if (!SASToken.StartsWith("?"))
+                    {
+                        Log.Information("Adding ? to SAS Token");
+                        SASToken = "?" + SASToken;
+                    }
                     Log.Information("Encrypting SAS Token");
                     Config.Update("Config", "SASToken", EncryptionHelper.EncryptWithMachineKey(SASToken));
                 }
