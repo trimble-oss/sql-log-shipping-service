@@ -134,7 +134,7 @@ namespace LogShippingService
             return !isExcluded && isIncluded;
         }
 
-        private void ProcessDatabase(string db, DateTime fromDate, int processCount = 1)
+        private void ProcessDatabase(string db, DateTime fromDate, int processCount = 1,bool reProcess=false)
         {
             if (!IsIncludedDatabase(db))
             {
@@ -146,7 +146,7 @@ namespace LogShippingService
             {
                 try
                 {
-                    RestoreLogs(logFiles, db);
+                    RestoreLogs(logFiles, db,reProcess);
                     op.Complete();
                 }
                 catch (TimeoutException ex) when (ex.Message == "Max processing time exceeded")
@@ -179,12 +179,12 @@ namespace LogShippingService
                 // Too recent
                 case 1:
                     Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 60min.");
-                    ProcessDatabase(db, fromDate.AddMinutes(-60), processCount + 1);
+                    ProcessDatabase(db, fromDate.AddMinutes(-60), processCount + 1,true);
                     break;
 
                 case 2:
                     Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 1 day.");
-                    ProcessDatabase(db, fromDate.AddMinutes(-1440), processCount + 1);
+                    ProcessDatabase(db, fromDate.AddMinutes(-1440), processCount + 1,true);
                     break;
 
                 default:
@@ -193,7 +193,7 @@ namespace LogShippingService
             }
         }
 
-        private void RestoreLogs(List<string> logFiles, string db)
+        private void RestoreLogs(List<string> logFiles, string db,bool reProcess)
         {
             BackupHeader? header = null;
             BigInteger? redoStartOrPreviousLastLSN = null;
@@ -254,7 +254,20 @@ namespace LogShippingService
                             $"Header verification failed for {logPath}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
                     }
 
-                    if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN >= redoStartOrPreviousLastLSN)
+                    if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN == redoStartOrPreviousLastLSN)
+                    {
+                        if (reProcess) // Reprocess previous file if we got a too recent error, otherwise skip it
+                        {
+                            Log.Information("Re-processing {logPath}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.FirstLSN, header.LastLSN);
+                            continue;
+                        }
+                        else
+                        {
+                            Log.Information("Skipping {logPath}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.FirstLSN, header.LastLSN);
+                            continue;
+                        }
+                    }
+                    else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN > redoStartOrPreviousLastLSN)
                     {
                         Log.Information("Header verification successful for {logPath}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.FirstLSN, header.LastLSN);
                     }
