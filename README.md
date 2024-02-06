@@ -40,7 +40,7 @@ The log shipping service runs as a Windows service.  Configure the service using
     "MaxProcessingTimeMins":  60
   }
   ```
-:warning: For UNC paths, the backslash character needs to be encoded.  "\\" becomes "\\\\".  A double backslash "\\\\" becomes "\\\\\\\\".
+:warning: **For UNC paths, the backslash character needs to be encoded.  `\` becomes `\\`.  A double backslash `\\` becomes `\\\\`.**
 
 The SASToken value will be encrypted with the machine key when the service starts.  It's recommended to use Windows authentication for the "Destination" connection string.
 
@@ -148,7 +148,17 @@ You can initialize new databases created on the primary instance by specifying a
   }
 ```
 
-To be initialized, the database should be online with FULL or BULK LOGGED recovery model.  The database needs a FULL backup and the backup location must be accessible on the target server.  If you use Ola Hallengren's backup solution, the @ChangeBackupType parameter can be used to create a FULL backup for new databases when the LOG backup job runs.
+To be initialized, the database should be online with FULL or BULK LOGGED recovery model.  The database needs a FULL backup and the backup location must be accessible on the target server.  If you use Ola Hallengren's backup solution, the @ChangeBackupType parameter can be used to create a FULL backup for new databases when the LOG backup job runs.  If you are backing up to a local path, it's possible to do a string find/replace to convert it into a UNC path that is accessible on the secondary node. 
+
+```json
+  "Config": {
+      "SourceConnectionString": "Data Source=PRIMARY1;Integrated Security=True;Encrypt=True;Trust Server Certificate=True",
+       "MSDBPathFind": "B:\\Backup\\",
+       "MSDBPathReplace": "\\\\SERVERNAME\\Backup\\"
+      //...
+  }
+```
+*Note: You need to escape the `\` character with `\\`*
 
 ### From backup folder
 
