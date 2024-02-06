@@ -49,7 +49,8 @@ namespace LogShippingService
             Log.Information("Initializing new database: {db}", db);
             var lastFull = new LastBackup(db, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseFull );
             var lastDiff = new LastBackup(db, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseDiff );
-
+            ReplacePaths(ref lastFull); // Replace paths if necessary.  e.g. Convert local path to UNC path
+            ReplacePaths(ref lastDiff); // Replace paths if necessary.  e.g. Convert local path to UNC path
             if (lastFull.FileList.Count == 0)
             {
                 Log.Error("No backups available to initialize {db}", db);
@@ -70,6 +71,20 @@ namespace LogShippingService
             if (IsDiffApplicable(fullHeader,diffHeader))
             {
                 lastDiff.Restore();
+            }
+        }
+
+
+        /// <summary>
+        /// Replace paths if path replacement is configured.  e.g. Convert local path to UNC path
+        /// </summary>
+        /// <param name="backup"></param>
+        private static void ReplacePaths(ref LastBackup backup)
+        {
+            if(Config.MSDBPathFind==null || Config.MSDBPathReplace==null) return;
+            for (var i=0; i<backup.FileList.Count; i++)
+            {
+                backup.FileList[i] = backup.FileList[i].Replace(Config.MSDBPathFind, Config.MSDBPathReplace);
             }
         }
 

@@ -35,6 +35,8 @@ namespace LogShippingService
         public static string? MoveFileStreamFolder;
         public static string? ReadOnlyPartialBackupPathTemplate;
         public static bool RecoverPartialBackupWithoutReadOnly;
+        public static string? MSDBPathFind;
+        public static string? MSDBPathReplace;
 
         static Config()
         {
@@ -115,6 +117,8 @@ namespace LogShippingService
                 MoveLogFolder = configuration["Config:MoveLogFolder"];
                 MoveFileStreamFolder = configuration["Config:MoveFileStreamFolder"];
                 RecoverPartialBackupWithoutReadOnly = bool.Parse(configuration["Config:RecoverPartialBackupWithoutReadOnly"] ?? false.ToString());
+                MSDBPathFind = configuration["Config:MSDBPathFind"];
+                MSDBPathReplace = configuration["Config:MSDBPathReplace"];
             }
             catch (Exception ex)
             {
