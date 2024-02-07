@@ -47,6 +47,7 @@ namespace LogShippingService
         public BackupTypes BackupType { get; set; }
         public DateTime? ExpirationDate { get; set; }
         public bool Compressed { get; set; }
+        public int Position { get; set; }
         public DeviceTypes DeviceType { get; set; }
 
         public string UserName { get; set; } = null!;
@@ -150,6 +151,7 @@ namespace LogShippingService
             BackupType = (BackupTypes)Convert.ToInt32(row["BackupType"]);
             ExpirationDate = row["ExpirationDate"] == DBNull.Value ? null : Convert.ToDateTime(row["ExpirationDate"]);
             Compressed = Convert.ToBoolean(row["Compressed"]);
+            Position = Convert.ToInt32(row["Position"]);
             DeviceType = (DeviceTypes)Convert.ToInt32(row["DeviceType"]);
             UserName = (string)row["UserName"];
             ServerName = (string)row["ServerName"];
