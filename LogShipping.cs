@@ -195,7 +195,7 @@ namespace LogShippingService
 
         private void RestoreLogs(List<string> logFiles, string db,bool reProcess)
         {
-            BackupHeader? header = null;
+            //BackupHeader? header = null;
             BigInteger? redoStartOrPreviousLastLSN = null;
             if (Config.CheckHeaders)
             {
@@ -242,88 +242,95 @@ namespace LogShippingService
                         continue;
                     }
 
-                    if (headers.Count > 1)
+                    if (headers.Count > 1) // Multiple logical backups in single file. This is now handled, but log a warning as it's unexpected.
                     {
-                        throw new Exception("File contains multiple backups");
+                        Log.Warning("Log File {logPath} contains {count} backups.  Expected 1, but each will be processed.",logPath,headers.Count);
                     }
-                    header = headers[0];
-
-                    if (!string.Equals(header.DatabaseName, db, StringComparison.OrdinalIgnoreCase))
+                    
+                    foreach (var header in headers)
                     {
-                        throw new HeaderVerificationException(
-                            $"Header verification failed for {logPath}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
-                    }
-
-                    if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN == redoStartOrPreviousLastLSN)
-                    {
-                        if (reProcess) // Reprocess previous file if we got a too recent error, otherwise skip it
+                        sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY, FILE = {header.Position}";
+                        if (!string.Equals(header.DatabaseName, db, StringComparison.OrdinalIgnoreCase))
                         {
-                            Log.Information("Re-processing {logPath}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.FirstLSN, header.LastLSN);
+                            throw new HeaderVerificationException(
+                                $"Header verification failed for {logPath}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
+                        }
+
+                        if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN == redoStartOrPreviousLastLSN)
+                        {
+                            if (reProcess) // Reprocess previous file if we got a too recent error, otherwise skip it
+                            {
+                                Log.Information("Re-processing {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath,header.Position, header.FirstLSN, header.LastLSN);
+                                continue;
+                            }
+                            else
+                            {
+                                Log.Information("Skipping {logPath}, FILE={Position}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath,header.Position, header.FirstLSN, header.LastLSN);
+                                continue;
+                            }
+                        }
+                        else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN > redoStartOrPreviousLastLSN)
+                        {
+                            Log.Information("Header verification successful for {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath,header.Position, header.FirstLSN, header.LastLSN);
+                        }
+                        else if (header.FirstLSN < redoStartOrPreviousLastLSN)
+                        {
+                            Log.Information("Skipping {logPath}.  A later LSN is required: {RequiredLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
                             continue;
                         }
-                        else
+                        else if (header.FirstLSN > redoStartOrPreviousLastLSN)
                         {
-                            Log.Information("Skipping {logPath}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.FirstLSN, header.LastLSN);
-                            continue;
+                            throw new HeaderVerificationException($"Header verification failed for {logPath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
                         }
-                    }
-                    else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN > redoStartOrPreviousLastLSN)
-                    {
-                        Log.Information("Header verification successful for {logPath}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.FirstLSN, header.LastLSN);
-                    }
-                    else if (header.FirstLSN < redoStartOrPreviousLastLSN)
-                    {
-                        Log.Information("Skipping {logPath}.  A later LSN is required: {RequiredLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
-                        continue;
-                    }
-                    else if (header.FirstLSN > redoStartOrPreviousLastLSN)
-                    {
-                        throw new HeaderVerificationException($"Header verification failed for {logPath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
+                        ProcessRestoreCommand(sql,db,file);
+                        redoStartOrPreviousLastLSN = header.LastLSN;
+                        
                     }
                 }
+                else
+                {
+                    ProcessRestoreCommand(sql, db,file);
+                }
+            }
+            RestoreWithStandby(db);
+        }
 
+        private static void ProcessRestoreCommand(string sql,string db,string file)
+        {
+            try
+            {
+                Execute(sql);
+            }
+            catch (SqlException ex) when
+                (ex.Number == 4326) // Log file is too early to apply, Log error and continue
+            {
+                Log.Warning(ex, "Log file is too early to apply. Processing will continue with next file.");
+            }
+            catch (SqlException ex) when
+                (ex.Number == 3203) // Read error.  Damaged backup? Log error and continue processing.
+            {
+                Log.Error(ex, "Error reading backup file {file} - possible damaged or incomplete backup.  Processing will continue with next file.", file);
+            }
+            catch (SqlException ex) when
+                (ex.Number == 3101) // Exclusive access could not be obtained because the database is in use.  Kill user connections and retry.
+            {
+                if (!KillUserConnections(db)) return;
+                Execute(sql);
+            }
+            catch (SqlException ex) when (ex.Number == 4319)
+            {
+                Log.Warning(ex,
+                    "A previous restore operation was interrupted for {db}.  Attempting to fix automatically with RESTART option", db);
+                sql += ",RESTART";
                 try
                 {
                     Execute(sql);
                 }
-                catch (SqlException ex) when
-                    (ex.Number == 4326) // Log file is too early to apply, Log error and continue
+                catch (Exception ex2)
                 {
-                    Log.Warning(ex, "Log file is too early to apply. Processing will continue with next file.");
-                }
-                catch (SqlException ex) when
-                    (ex.Number == 3203) // Read error.  Damaged backup? Log error and continue processing.
-                {
-                    Log.Error(ex, "Error reading backup file {file} - possible damaged or incomplete backup.  Processing will continue with next file.", file);
-                }
-                catch (SqlException ex) when
-                    (ex.Number == 3101) // Exclusive access could not be obtained because the database is in use.  Kill user connections and retry.
-                {
-                    if (!KillUserConnections(db)) return;
-                    Execute(sql);
-                }
-                catch (SqlException ex) when (ex.Number == 4319)
-                {
-                    Log.Warning(ex,
-                        "A previous restore operation was interrupted for {db}.  Attempting to fix automatically with RESTART option", db);
-                    sql += ",RESTART";
-                    try
-                    {
-                        Execute(sql);
-                    }
-                    catch (Exception ex2)
-                    {
-                        Log.Error(ex2, "Error running RESTORE with RESTART option. {sql}. Skipping file and trying next in sequence.", sql);
-                    }
-                }
-
-
-                if (header != null)
-                {
-                    redoStartOrPreviousLastLSN = header.LastLSN;
+                    Log.Error(ex2, "Error running RESTORE with RESTART option. {sql}. Skipping file and trying next in sequence.", sql);
                 }
             }
-            RestoreWithStandby(db);
         }
 
         private static bool KillUserConnections(string db)
