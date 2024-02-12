@@ -7,14 +7,14 @@ namespace LogShippingService
 {
     public abstract class DatabaseInitializerBase
     {
-        protected abstract void PollForNewDBs();
+        protected abstract void PollForNewDBs(CancellationToken stoppingToken);
 
         protected abstract void DoProcessDB(string db);
 
-        protected void ProcessDB(string db)
+        protected void ProcessDB(string db,CancellationToken stoppingToken)
         {
             if (!IsValidForInitialization(db)) return;
-            if (IsStopRequested) return;
+            if (stoppingToken.IsCancellationRequested) return;
             try
             {
                 if (LogShipping.InitializingDBs.TryAdd(db.ToLower(), db)) // To prevent log restores until initialization is complete
@@ -38,26 +38,6 @@ namespace LogShippingService
 
         protected List<DatabaseInfo>? DestinationDBs;
 
-        public bool IsStopRequested;
-        private readonly Waiter wait = new();
-
-        public void Stop()
-        {
-            wait.Stop();
-            IsStopRequested = true;
-        }
-
-        public void WaitForShutdown()
-        {
-            if (!IsStopRequested)
-            {
-                throw new Exception("Stop hasn't been requested.");
-            }
-            while (!IsStopped)
-            {
-                Thread.Sleep(100);
-            }
-        }
 
         public bool IsStopped { get; private set; }
 
@@ -71,7 +51,7 @@ namespace LogShippingService
             return LogShipping.IsIncludedDatabase(db);
         }
 
-        public void RunPollForNewDBs()
+        public async Task RunPollForNewDBs(CancellationToken stoppingToken)
         {
             if (!IsValidated)
             {
@@ -79,12 +59,10 @@ namespace LogShippingService
                 return;
             }
 
-            while (!IsStopRequested)
+            while (!stoppingToken.IsCancellationRequested)
             {
-                if (!wait.WaitUntilActiveHours())
-                {
-                    break;
-                }
+                await Waiter.WaitUntilActiveHours(stoppingToken);
+                if (stoppingToken.IsCancellationRequested) return;
                 try
                 {
                     DestinationDBs = DatabaseInfo.GetDatabaseInfo(Config.ConnectionString);
@@ -98,7 +76,7 @@ namespace LogShippingService
                 {
                     using (var op = Operation.Begin("Initialize new databases"))
                     {
-                        PollForNewDBs();
+                        PollForNewDBs(stoppingToken);
                         op.Complete();
                     }
                 }
@@ -109,9 +87,9 @@ namespace LogShippingService
 
                 var nextIterationStart = DateTime.Now.AddMinutes(Config.PollForNewDatabasesFrequency);
 
-                while (DateTime.Now < nextIterationStart && !IsStopRequested)
+                while (DateTime.Now < nextIterationStart && !stoppingToken.IsCancellationRequested)
                 {
-                    Thread.Sleep(100);
+                   await Task.Delay(100,stoppingToken);
                 }
             }
             Log.Information("Poll for new DBs is shutdown");

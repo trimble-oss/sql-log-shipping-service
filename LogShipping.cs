@@ -4,23 +4,27 @@ using Microsoft.Data.SqlClient;
 using Serilog;
 using SerilogTimings;
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Data;
 using System.Numerics;
+using Microsoft.Extensions.Hosting;
 
 namespace LogShippingService
 {
-    internal class LogShipping
+    internal class LogShipping: BackgroundService
     {
-        private bool _isStopRequested;
-        private bool _isShutdown;
+   
         public static ConcurrentDictionary<string, string> InitializingDBs = new();
 
         private readonly DatabaseInitializerBase? _initializer;
 
-        private readonly Waiter wait = new();
-
         public LogShipping()
         {
+            if (string.IsNullOrEmpty(Config.LogFilePathTemplate))
+            {
+                var message = "LogFilePath was not specified";
+                Log.Error(message); throw new Exception(message);
+            }
             if (!string.IsNullOrEmpty(Config.SourceConnectionString))
             {
                 Log.Information("New DBs initialized from msdb history last backup every {interval} mins.", Config.PollForNewDatabasesFrequency);
@@ -32,36 +36,47 @@ namespace LogShippingService
             }
         }
 
-        public void Start()
+
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            if (string.IsNullOrEmpty(Config.LogFilePathTemplate))
+            stoppingToken.Register(Stop);
+            var logRestoreTask= StartProcessing(stoppingToken);
+
+            try
             {
-                Log.Warning("LogFilePath was not specified.  Log restores won't be processed");
-                _isShutdown = true;
+                if (_initializer != null)
+                {
+                    await Task.WhenAll(logRestoreTask, _initializer.RunPollForNewDBs(stoppingToken));
+                }
+                else
+                {
+                    await logRestoreTask;
+                }
             }
-            else
+            catch (TaskCanceledException ex)
             {
-                Task.Run(StartProcessing);
+                Log.Information("Processing stopped due to cancellation request");
+                await Log.CloseAndFlushAsync();
             }
-            if (_initializer != null)
+            catch (Exception ex)
             {
-                Task.Run(_initializer.RunPollForNewDBs);
+                Log.Error(ex,"Processing stopped due to unexpected error");
+                await Log.CloseAndFlushAsync();
+                Environment.Exit(1);
             }
         }
 
-        private void StartProcessing()
+ 
+        private async Task StartProcessing(CancellationToken stoppingToken)
         {
+            
             long i = 1;
-            while (!_isStopRequested)
+            while (!stoppingToken.IsCancellationRequested)
             {
-                if (!wait.WaitUntilActiveHours())
-                {
-                    break;
-                }
                 Log.Information("Starting iteration {0}", i);
                 try
                 {
-                    Process();
+                   await Process(stoppingToken);
                 }
                 catch (Exception ex)
                 {
@@ -71,37 +86,22 @@ namespace LogShippingService
                 var nextIterationStart = DateTime.Now.AddMilliseconds(Config.IterationDelayMs);
                 Log.Information(
                     $"Iteration {i} Completed.  Next iteration will start at {nextIterationStart}");
-                while (DateTime.Now < nextIterationStart && !_isStopRequested)
+                while (DateTime.Now < nextIterationStart && !stoppingToken.IsCancellationRequested)
                 {
-                    Thread.Sleep(100);
+                    await Task.Delay(100,stoppingToken);
                 }
                 i++;
+                await Waiter.WaitUntilActiveHours(stoppingToken);
             }
             Log.Information("Finished processing LOG restores");
-            _isShutdown = true;
         }
 
         public void Stop()
         {
             Log.Information("Initiating shutdown...");
-            _isStopRequested = true;
-            _initializer?.Stop();
-            wait.Stop();
-            _initializer?.WaitForShutdown();
-            WaitForShutdown();
-            Log.Information("Shutdown complete.");
-            Log.CloseAndFlush();
         }
-
-        public void WaitForShutdown()
-        {
-            while (!_isShutdown)
-            {
-                Thread.Sleep(100);
-            }
-        }
-
-        private void Process()
+        
+        private Task Process(CancellationToken stoppingToken)
         {
             DataTable dt;
             using (Operation.Time("GetDatabases"))
@@ -111,30 +111,29 @@ namespace LogShippingService
 
             Parallel.ForEach(dt.AsEnumerable(), new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads }, row =>
             {
-                if (!_isStopRequested && Waiter.CanRestoreLogsNow)
+                if (stoppingToken.IsCancellationRequested || !Waiter.CanRestoreLogsNow) return;
+                var db = (string)row["Name"];
+                if (InitializingDBs.ContainsKey(db.ToLower()))
                 {
-                    var db = (string)row["Name"];
-                    if (InitializingDBs.ContainsKey(db.ToLower()))
-                    {
-                        Log.Information("Skipping log restores for {db} due to initialization", db);
-                        return;
-                    }
-                    var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
-                    fromDate = fromDate.AddMinutes(Config.OffSetMins);
-                    ProcessDatabase(db, fromDate);
+                    Log.Information("Skipping log restores for {db} due to initialization", db);
+                    return;
                 }
+                var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
+                fromDate = fromDate.AddMinutes(Config.OffSetMins);
+                ProcessDatabase(db, fromDate,stoppingToken);
             });
+            return Task.CompletedTask;
         }
 
         public static bool IsIncludedDatabase(string db)
         {
-            bool isExcluded = Config.ExcludedDatabases.Count > 0 && Config.ExcludedDatabases.Any(e => e.Equals(db, StringComparison.OrdinalIgnoreCase));
-            bool isIncluded = Config.IncludedDatabases.Count == 0 || Config.IncludedDatabases.Any(e => e.Equals(db, StringComparison.OrdinalIgnoreCase));
+            var isExcluded = Config.ExcludedDatabases.Count > 0 && Config.ExcludedDatabases.Any(e => e.Equals(db, StringComparison.OrdinalIgnoreCase));
+            var isIncluded = Config.IncludedDatabases.Count == 0 || Config.IncludedDatabases.Any(e => e.Equals(db, StringComparison.OrdinalIgnoreCase));
 
             return !isExcluded && isIncluded;
         }
 
-        private void ProcessDatabase(string db, DateTime fromDate, int processCount = 1,bool reProcess=false)
+        private void ProcessDatabase(string db, DateTime fromDate, CancellationToken stoppingToken, int processCount = 1,bool reProcess=false)
         {
             if (!IsIncludedDatabase(db))
             {
@@ -146,7 +145,7 @@ namespace LogShippingService
             {
                 try
                 {
-                    RestoreLogs(logFiles, db,reProcess);
+                    RestoreLogs(logFiles, db,reProcess,stoppingToken);
                     op.Complete();
                 }
                 catch (TimeoutException ex) when (ex.Message == "Max processing time exceeded")
@@ -158,12 +157,12 @@ namespace LogShippingService
                 }
                 catch (SqlException ex) when (ex.Number == 4305)
                 {
-                    HandleTooRecent(ex, db, fromDate, processCount);
+                    HandleTooRecent(ex, db, fromDate, processCount,stoppingToken);
                 }
                 catch (HeaderVerificationException ex) when (ex.VerificationStatus ==
                                                              BackupHeader.HeaderVerificationStatus.TooRecent)
                 {
-                    HandleTooRecent(ex, db, fromDate, processCount);
+                    HandleTooRecent(ex, db, fromDate, processCount,stoppingToken);
                 }
                 catch (Exception ex)
                 {
@@ -172,19 +171,19 @@ namespace LogShippingService
             }
         }
 
-        private void HandleTooRecent(Exception ex, string db, DateTime fromDate, int processCount)
+        private void HandleTooRecent(Exception ex, string db, DateTime fromDate, int processCount, CancellationToken stoppingToken)
         {
             switch (processCount)
             {
                 // Too recent
                 case 1:
                     Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 60min.");
-                    ProcessDatabase(db, fromDate.AddMinutes(-60), processCount + 1,true);
+                    ProcessDatabase(db, fromDate.AddMinutes(-60),stoppingToken, processCount + 1,true);
                     break;
 
                 case 2:
                     Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 1 day.");
-                    ProcessDatabase(db, fromDate.AddMinutes(-1440), processCount + 1,true);
+                    ProcessDatabase(db, fromDate.AddMinutes(-1440),stoppingToken, processCount + 1,true);
                     break;
 
                 default:
@@ -193,9 +192,8 @@ namespace LogShippingService
             }
         }
 
-        private void RestoreLogs(List<string> logFiles, string db,bool reProcess)
+        private Task RestoreLogs(List<string> logFiles, string db,bool reProcess, CancellationToken stoppingToken)
         {
-            //BackupHeader? header = null;
             BigInteger? redoStartOrPreviousLastLSN = null;
             if (Config.CheckHeaders)
             {
@@ -211,7 +209,7 @@ namespace LogShippingService
                     // Stop processing logs if max processing time is exceeded. Prevents a single DatabaseName that has fallen behind from impacting other DBs
                     throw new TimeoutException("Max processing time exceeded");
                 }
-                if (_isStopRequested)
+                if (stoppingToken.IsCancellationRequested)
                 {
                     Log.Information("Halt log restores for {db} due to stop request", db);
                     break;
@@ -293,6 +291,7 @@ namespace LogShippingService
                 }
             }
             RestoreWithStandby(db);
+            return Task.CompletedTask;
         }
 
         private static void ProcessRestoreCommand(string sql,string db,string file)

@@ -1,6 +1,8 @@
 ﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Serilog;
-using Topshelf;
+
 
 namespace LogShippingService
 {
@@ -21,24 +23,21 @@ namespace LogShippingService
                 .ReadFrom.Configuration(configuration)
                 .CreateLogger();
 
-            HostFactory.Run(x =>
-            {
-                x.Service<LogShipping>(s =>
-                {
-                    s.ConstructUsing(_ => new LogShipping());
-                    s.WhenStarted(tc => tc.Start());
-                    s.WhenStopped(tc => tc.Stop());
-                });
-                x.StartAutomaticallyDelayed();
-                x.EnableServiceRecovery(r =>
-                {
-                    r.RestartService(1);
-                });
+            var builder = Host.CreateApplicationBuilder();
 
-                x.SetDescription("Log Shipping Service for SQL Server");
-                x.SetDisplayName("Log Shipping Service");
-                x.SetServiceName("LogShippingService");
+            // Configure the ShutdownTimeout to infinite
+            builder.Services.Configure<HostOptions>(options =>
+                options.ShutdownTimeout = Timeout.InfiniteTimeSpan);
+            builder.Services.AddWindowsService(options =>
+            {
+                options.ServiceName = "LogShippingService";
             });
+            builder.Services.AddHostedService<LogShipping>();
+
+
+            var host = builder.Build();
+            host.Run();
+
 
         }
     }
