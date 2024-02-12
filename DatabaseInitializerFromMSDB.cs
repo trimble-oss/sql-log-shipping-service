@@ -22,7 +22,7 @@ namespace LogShippingService
         /// <summary>
         /// Check for new DBs in the source connection that don't exist in the destination.  
         /// </summary>
-        protected override void PollForNewDBs()
+        protected override void PollForNewDBs(CancellationToken stoppingToken)
         {
             List<DatabaseInfo> newDBs;
             using (Operation.Time("Polling for new databases using msdb history"))
@@ -35,7 +35,7 @@ namespace LogShippingService
                 new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
                 newDb =>
                 {
-                      ProcessDB(newDb.Name);
+                      ProcessDB(newDb.Name,stoppingToken);
                 });
         }
 

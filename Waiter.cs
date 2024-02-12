@@ -9,29 +9,23 @@ namespace LogShippingService
 {
     internal class Waiter
     {
-        private bool _isStopRequested;
-        public void Stop()
-        {
-            _isStopRequested=true;
-        }
 
-        public bool WaitUntilActiveHours()
+        public static async Task WaitUntilActiveHours(CancellationToken stoppingToken)
         {
-            if (CanRestoreLogsNow) return !_isStopRequested;
+            if (CanRestoreLogsNow) return;
 
             Log.Information("Waiting for active hours to run {Hours}", Config.Hours);
             
-            while (!CanRestoreLogsNow && !_isStopRequested)
+            while (!CanRestoreLogsNow && !stoppingToken.IsCancellationRequested)
             {
-                Thread.Sleep(1000);
+               await Task.Delay(1000, stoppingToken);
             }
 
-            if (!_isStopRequested)
+            if (!stoppingToken.IsCancellationRequested)
             {
                 Log.Information("Wait for active hours is complete");
             }
 
-            return !_isStopRequested;
         }
 
         public static bool CanRestoreLogsNow => Config.Hours.Contains(DateTime.Now.Hour);

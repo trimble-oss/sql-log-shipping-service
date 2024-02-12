@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using Accessibility;
 using Serilog;
 
 namespace LogShippingService
@@ -20,14 +21,23 @@ namespace LogShippingService
             }
         }
 
-        protected override void PollForNewDBs()
+        protected override void PollForNewDBs(CancellationToken stoppingToken)
         {
             if (string.IsNullOrEmpty(Config.FullBackupPathTemplate)) return;
-      
+
             Parallel.ForEach(FileHandler.GetDatabases(),
-                    new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
-                    ProcessDB);
-           
+                new ParallelOptions { MaxDegreeOfParallelism = Config.MaxThreads },
+                (database, state) =>
+                {
+                    if (stoppingToken.IsCancellationRequested)
+                    {
+                        state.Stop(); // Stop the loop if cancellation is requested
+                    }
+
+                    ProcessDB(database, stoppingToken);
+                });
+
+
         }
 
         protected override void DoProcessDB(string db)
@@ -35,6 +45,7 @@ namespace LogShippingService
             var fullFolder = Config.FullBackupPathTemplate?.Replace(Config.DatabaseToken, db);
             var diffFolder = Config.DiffBackupPathTemplate?.Replace(Config.DatabaseToken, db);
             var readOnlyFolder = Config.ReadOnlyPartialBackupPathTemplate?.Replace(Config.DatabaseToken, db);
+            if(fullFolder==null){ return;}
             if (DeviceType == BackupHeader.DeviceTypes.Disk && !Directory.Exists(fullFolder))
             {
                 Log.Warning("Skipping {db}.  Directory {path} doesn't exist",db,fullFolder);
