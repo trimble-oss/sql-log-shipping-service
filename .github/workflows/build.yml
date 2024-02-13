@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    name: Build
+    name: Build & Test
     runs-on: windows-latest
 
     steps:
@@ -16,7 +16,68 @@ jobs:
       - name: Setup
         uses: actions/setup-dotnet@v3
         with:
-          dotnet-version: 6.0.x
+          dotnet-version: 8.0.x
 
       - name: Build solution
-        run: dotnet build LogShippingService.sln -p:Configuration=Release
+        run: dotnet build LogShippingService.csproj -p:Configuration=Release -o Build
+
+      - name: Install SQL
+        uses: potatoqualitee/mssqlsuite@v1.7
+        with:
+          install: sqlengine
+          collation: Latin1_General_BIN
+
+      - name: Check SQL Install
+        run: | 
+          sqlcmd -S localhost -U sa -P dbatools.I0 -d tempdb -Q "SELECT @@version as Version;"
+          sqlcmd -S localhost -U sa -P dbatools.I0 -d tempdb -Q "SELECT SERVERPROPERTY('Collation') AS Collation;"
+
+      - name: DBATools
+        run: | 
+          Install-Module dbatools -Force
+          Set-DbatoolsConfig -FullName sql.connection.trustcert -Value $true -Register
+
+      - name: Create Database
+        run: |
+          New-DbaDatabase -SqlInstance localhost -Name LogShipping1,LogShipping2,LogShipping3 -RecoveryModel FULL
+          Get-DbaDatabase -SqlInstance localhost -ExcludeSystem | Select-Object {$_.Name}
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\FULL\ -Database LogShipping1,LogShipping2,LogShipping3 -Type Full -CreateFolder
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database LogShipping2,LogShipping3 -Type LOG -CreateFolder
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database LogShipping1 -Type LOG -CreateFolder -FilePath LogShipping1_1.trn
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database LogShipping1 -Type LOG -CreateFolder -FilePath LogShipping1_1.trn
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database LogShipping1 -Type LOG -CreateFolder -FilePath LogShipping1_2.trn
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database LogShipping1 -Type LOG -CreateFolder -FilePath LogShipping1_3.trn
+          Remove-DbaDatabase -SqlInstance localhost -Database LogShipping1,LogShipping2,LogShipping3 -Confirm:$false
+          Get-DbaDatabase -SqlInstance localhost -ExcludeSystem | Select-Object {$_.Name}
+          
+      - name: Configure
+        run: | 
+          New-Item -Path C:\sql-log-shipping-service -ItemType Directory
+          New-Item -Path C:\Standby -ItemType Directory
+          Copy-Item -Path .\test\appsettings.json.test -Destination C:\sql-log-shipping-service\appsettings.json
+          Copy-Item -Path .\Build\* -Destination C:\sql-log-shipping-service -Recurse
+
+      - name: Run service
+        run: | 
+          sc.exe create "LogShippingService" binpath="C:\sql-log-shipping-service\LogShippingService.exe"
+          net start LogShippingService
+
+      - name: Wait & Output Logs
+        run: | 
+            $LoopCount=0
+            $MaxLoopCount=30
+            while((Get-DbaDatabase -SqlInstance "LOCALHOST" -Status "Standby").Count -lt 3 -and $LoopCount -lt $MaxLoopCount) {
+              Start-Sleep -s 2
+              Write-Output "Waiting for databases to be in Standby mode"
+              $LoopCount++
+            }
+            if($LoopCount -eq $MaxLoopCount) {
+              Write-Warning "Timeout waiting for databases to be in Standby mode"
+            }
+            Get-ChildItem -Path C:\sql-log-shipping-service\Logs | Get-Content
+
+      - name: Run Pester Tests
+        run: |     
+          Install-Module Pester -Force
+          Import-Module Pester -PassThru
+          Invoke-Pester -Output Detailed test\CI_Workflow.Tests.ps1
