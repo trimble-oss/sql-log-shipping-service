@@ -148,7 +148,8 @@ SELECT	t.destination_database_name,
 		t.is_force_offline AS IsTailLog,
 		CASE WHEN t.is_force_offline=1 THEN 'RESTORE DATABASE ' + QUOTENAME(t.destination_database_name) + ' WITH RECOVERY' ELSE NULL END AS [Restore Command (Printed if tail log is restored)]
 FROM t
-WHERE t.rnum=1;
+WHERE t.rnum=1
+ORDER BY t.backup_finish_date;
 ```
 
 If you have issues with log shipping, check the **Logs** folder.  If you don't have any logs it's possible that the service account doesn't have permissions to write to the application folder.  Check the permissions on the folder.  You can also try running the application directly where it will output it's logs to the console.  
