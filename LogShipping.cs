@@ -53,7 +53,7 @@ namespace LogShippingService
                     await logRestoreTask;
                 }
             }
-            catch (TaskCanceledException ex)
+            catch (TaskCanceledException)
             {
                 Log.Information("Processing stopped due to cancellation request");
                 await Log.CloseAndFlushAsync();
