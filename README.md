@@ -126,30 +126,35 @@ Once the service has looped through all the databases, it will start the next it
 It's important to monitor your log shipping.  The standard transaction log shipping status report isn't available with custom log shipping implementations.  [DBA Dash](https://dbadash.com/) has log shipping monitoring that will work with custom log shipping implementations like this.  You can query the msdb history tables instead to check the health of your log shipping.  e.g.
 
 ```sql
-WITH t AS (
-    SELECT  rsh.destination_database_name,
-			      bs.backup_finish_date,
-            rsh.restore_date,
-            bmf.physical_device_name,
-            ROW_NUMBER() OVER (PARTITION BY rsh.destination_database_name ORDER BY rsh.restore_date DESC) rnum,
-            bs.is_force_offline
-    FROM msdb.dbo.restorehistory rsh
-    INNER JOIN msdb.dbo.backupset bs ON rsh.backup_set_id = bs.backup_set_id
-    INNER JOIN msdb.dbo.restorefile rf ON rsh.restore_history_id = rf.restore_history_id
-    INNER JOIN msdb.dbo.backupmediafamily bmf ON bmf.media_set_id = bs.media_set_id
-    WHERE rsh.restore_type = 'L'
-)
-SELECT	t.destination_database_name,
+SELECT	D.name AS DB,
+		D.state,
+		D.state_desc,
+		D.is_in_standby,
 		t.backup_finish_date,
 		t.restore_date,
 		DATEDIFF(mi,t.restore_date,GETDATE()) as MinsSinceLastRestore,
 		DATEDIFF(mi,t.backup_finish_date,GETDATE()) AS TotalTimeBehindMins,
-		t.physical_device_name,
+		t.physical_device_name AS LastLog,
 		t.is_force_offline AS IsTailLog,
 		CASE WHEN t.is_force_offline=1 THEN 'RESTORE DATABASE ' + QUOTENAME(t.destination_database_name) + ' WITH RECOVERY' ELSE NULL END AS [Restore Command (Printed if tail log is restored)]
-FROM t
-WHERE t.rnum=1
-ORDER BY t.backup_finish_date;
+FROM sys.databases D
+OUTER APPLY(SELECT TOP(1)  rsh.destination_database_name,
+			      bs.backup_finish_date,
+				rsh.restore_date,
+				bmf.physical_device_name,
+				ROW_NUMBER() OVER (PARTITION BY rsh.destination_database_name ORDER BY rsh.restore_history_id DESC) rnum,
+				bs.is_force_offline,
+				rsh.restore_history_id
+		FROM msdb.dbo.restorehistory rsh
+		INNER JOIN msdb.dbo.backupset bs ON rsh.backup_set_id = bs.backup_set_id
+		INNER JOIN msdb.dbo.restorefile rf ON rsh.restore_history_id = rf.restore_history_id
+		INNER JOIN msdb.dbo.backupmediafamily bmf ON bmf.media_set_id = bs.media_set_id
+		WHERE rsh.restore_type = 'L'
+		AND D.name =  rsh.destination_database_name
+		ORDER BY rsh.restore_history_id DESC
+	) t
+WHERE (D.state = 1 OR D.is_in_standby=1)
+ORDER BY t.restore_history_id;
 ```
 
 If you have issues with log shipping, check the **Logs** folder.  If you don't have any logs it's possible that the service account doesn't have permissions to write to the application folder.  Check the permissions on the folder.  You can also try running the application directly where it will output it's logs to the console.  
