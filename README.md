@@ -138,13 +138,11 @@ SELECT	D.name AS DB,
 		t.is_force_offline AS IsTailLog,
 		CASE WHEN t.is_force_offline=1 THEN 'RESTORE DATABASE ' + QUOTENAME(t.destination_database_name) + ' WITH RECOVERY' ELSE NULL END AS [Restore Command (Printed if tail log is restored)]
 FROM sys.databases D
-OUTER APPLY(SELECT TOP(1)  rsh.destination_database_name,
-			      bs.backup_finish_date,
-				rsh.restore_date,
-				bmf.physical_device_name,
-				ROW_NUMBER() OVER (PARTITION BY rsh.destination_database_name ORDER BY rsh.restore_history_id DESC) rnum,
-				bs.is_force_offline,
-				rsh.restore_history_id
+OUTER APPLY(SELECT TOP(1)	rsh.destination_database_name,
+							bs.backup_finish_date,
+							rsh.restore_date,
+							bmf.physical_device_name,
+							bs.is_force_offline
 		FROM msdb.dbo.restorehistory rsh
 		INNER JOIN msdb.dbo.backupset bs ON rsh.backup_set_id = bs.backup_set_id
 		INNER JOIN msdb.dbo.restorefile rf ON rsh.restore_history_id = rf.restore_history_id
@@ -154,7 +152,7 @@ OUTER APPLY(SELECT TOP(1)  rsh.destination_database_name,
 		ORDER BY rsh.restore_history_id DESC
 	) t
 WHERE (D.state = 1 OR D.is_in_standby=1)
-ORDER BY t.restore_history_id;
+ORDER BY t.backup_finish_date;
 ```
 
 If you have issues with log shipping, check the **Logs** folder.  If you don't have any logs it's possible that the service account doesn't have permissions to write to the application folder.  Check the permissions on the folder.  You can also try running the application directly where it will output it's logs to the console.  
