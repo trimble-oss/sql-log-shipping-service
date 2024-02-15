@@ -154,7 +154,7 @@ namespace LogShippingService
                 IncludedDatabases = configuration.GetSection("Config:IncludedDatabases").Get<List<string>>() ?? new List<string>();
                 ExcludedDatabases = configuration.GetSection("Config:ExcludedDatabases").Get<List<string>>() ?? new List<string>();
                 SourceConnectionString = configuration["Config:SourceConnectionString"];
-                PollForNewDatabasesFrequency = int.Parse(configuration["Config:PollForNewDatabasesFrequency"] ?? 1.ToString());
+                PollForNewDatabasesFrequency = int.Parse(configuration["Config:PollForNewDatabasesFrequency"] ?? 10.ToString());
                 CheckHeaders = bool.Parse(configuration["Config:CheckHeaders"] ?? true.ToString());
                 Log.Information("Included {IncludedDBs}", IncludedDatabases);
                 Log.Information("Excluded {ExcludedDBs}", ExcludedDatabases);
@@ -195,7 +195,7 @@ namespace LogShippingService
                 }
 
                 ConnectionString = configuration["Config:Destination"] ?? throw new InvalidOperationException();
-                MaxThreads = int.Parse(configuration["Config:MaxThreads"] ?? throw new InvalidOperationException());
+                MaxThreads = int.Parse(configuration["Config:MaxThreads"] ?? 5.ToString());
                 LogFilePathTemplate = configuration["Config:LogFilePath"];
                 FullBackupPathTemplate = configuration["Config:FullFilePath"];
                 DiffBackupPathTemplate = configuration["Config:DiffFilePath"];
@@ -205,10 +205,10 @@ namespace LogShippingService
                     throw new ValidationException("LogFilePathTemplate should contain '{DatabaseToken}'");
                 }
                 IterationDelayMs = int.Parse(configuration["Config:DelayBetweenIterationsMs"] ??
-                                               throw new InvalidOperationException());
-                OffSetMins = int.Parse(configuration["Config:OffsetMins"] ?? throw new InvalidOperationException());
+                                               60000.ToString());
+                OffSetMins = int.Parse(configuration["Config:OffsetMins"] ?? 0.ToString());
                 MaxProcessingTimeMins = int.Parse(configuration["Config:MaxProcessingTimeMins"] ??
-                                                    throw new InvalidOperationException());
+                                                    60.ToString());
                 InitializeSimple = bool.Parse(configuration["Config:InitializeSimple"] ?? false.ToString());
                 MaxBackupAgeForInitialization = int.Parse(configuration["Config:MaxBackupAgeForInitialization"] ?? 14.ToString());
                 MoveDataFolder = configuration["Config:MoveDataFolder"];
