@@ -8,50 +8,134 @@ namespace LogShippingService
 {
     internal static class Config
     {
-        // Azure
+        #region Azure
+        /// <summary>Container URL to be used when restoring directly from Azure blob containers</summary>
         public static readonly string? ContainerURL;
+
+        /// <summary>SAS Token be used to allow access to Azure blob container when restoring directly from Azure blob.</summary>
         public static readonly string? SASToken;
-        // Basic Config
+
+        #endregion
+
+        #region BasicConfig
+
         public static readonly string ConnectionString;
         public static readonly string? LogFilePathTemplate;
-        //Schedule
+
+        #endregion
+
+        #region Schedule
+
+        /// <summary>Delay between processing log restores in milliseconds</summary>
         public static readonly int IterationDelayMs;
-        public static string? LogRestoreScheduleCron;
+
+        /// <summary>Cron schedule for log restores.  Overrides IterationDelayMs if specified </summary>
+        public static string? LogRestoreScheduleCron; 
+
+        /// <summary>Return if cron schedule should be used for log restores</summary>
         public static bool UseLogRestoreScheduleCron => !string.IsNullOrEmpty(LogRestoreScheduleCron) && LogRestoreCron!=null;
+
+        /// <summary>Cron expression for generating next log restore time</summary>
         public static CronExpression? LogRestoreCron;
+
+        /// <summary>Timezone offset to handle timezone differences if needed</summary>
         public static readonly int OffSetMins;
+
+        /// <summary>Maximum amount of time to spend processing log restores for a single database in minutes.</summary>
         public static readonly int MaxProcessingTimeMins;
+
+        /// <summary> Hours where log restores will run.  Default is all hours. 0..23 </summary>
         public static List<int> Hours;
+
+        /// <summary>How often to poll for new databases in minutes</summary>
         public static int PollForNewDatabasesFrequency;
+
+        /// <summary>Cron schedule for initializing new databases.  Overrides PollForNewDatabasesFrequency if specified</summary>
         public static string? PollForNewDatabasesCron;
+
+        /// <summary>Cron expression for generating next database initialization time</summary>
         public static CronExpression? PollForNewDatabasesCronExpression;
+
+        /// <summary>Return if cron schedule should be used for database initialization</summary>
         public static bool UsePollForNewDatabasesCron => !string.IsNullOrEmpty(PollForNewDatabasesCron) && PollForNewDatabasesCronExpression!=null;
-        //Standby
+
+        #endregion
+
+        #region Standby
+
+        /// <summary>Path to standby file which should contain {DatabaseName} token to be replaced with database name.  If null, standby will not be used.</summary>
         public static readonly string? StandbyFileName;
+
+        /// <summary>Kill user connections to the databases to allow restores to proceed</summary>
         public static bool KillUserConnections;
+
+        /// <summary>Killed user connections will be rolled back after the specified number of seconds.  Defaults to 60 seconds.</summary>
         public static int KillUserConnectionsWithRollBackAfter;
-        // Initialization
+
+        #endregion
+
+        #region Initialization
+
+        /// <summary>Full backup path for initialization of new databases.  If null, initialization from disk will not be performed. e.g. \BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\FULL</summary>
         public static string? FullBackupPathTemplate;
+        
+        /// <summary>Diff backup path for initialization of new databases.  If null, initialization will not use diff backups. e.g. \BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\DIFF</summary>
         public static string? DiffBackupPathTemplate;
+        
+        /// <summary>List of databases to include in log shipping.  If empty, all databases will be included.</summary>
         public static List<string> IncludedDatabases;
+        
+        /// <summary>List of databases to exclude from log shipping.  If empty, all databases will be included.</summary>
         public static List<string> ExcludedDatabases;
+        
+        /// <summary>Source connection string for initialization of new databases from msdb.  Overrides FullBackupPathTemplate and DiffBackupPathTemplate if specified.</summary>
         public static string? SourceConnectionString;
+        
+        /// <summary>Option to initialize databases using simple recovery model.  These databases can't be used for log shipping but we might want to restore in case of disaster recovery.</summary>
         public static bool InitializeSimple;
+        
+        /// <summary>Max age of backups to use for initialization in days.  Defaults to 14 days. Prevents old backups been used to initialize. </summary>
         public static int MaxBackupAgeForInitialization;
+        
+        /// <summary>Path to move data files to after initialization.  If null, files will be restored to their original location</summary>
         public static string? MoveDataFolder;
+        
+        /// <summary>Path to move log files to after initialization.  If null, files will be restored to their original location</summary>
         public static string? MoveLogFolder;
+        
+        /// <summary>Path to move filestream folders to after initialization.  If null, folders will be restored to their original location</summary>
         public static string? MoveFileStreamFolder;
+        
+        /// <summary>ReadOnly partial backup path for initialization of new databases. </summary>
         public static string? ReadOnlyPartialBackupPathTemplate;
+        
+        /// <summary>Option to recover partial backups without readonly</summary>
         public static bool RecoverPartialBackupWithoutReadOnly;
+        
+        /// <summary>Find part of find/replace for backup paths from msdb history.  e.g. Convert local paths to UNC paths</summary>
         public static string? MSDBPathFind;
+        
+        /// <summary>Replace part of find/replace for backup paths from msdb history.  e.g. Convert local paths to UNC paths</summary>
         public static string? MSDBPathReplace;
-        // Options
+
+        #endregion
+
+        #region OtherOptions
+
+        /// <summary>Database token to be used</summary>
         public static readonly string DatabaseToken = "{DatabaseName}";
+        /// <summary>Config file name</summary>
         private const string ConfigFile = "appsettings.json";
+        /// <summary>Option to check headers.  Defaults to true</summary>
         public static bool CheckHeaders;
+        /// <summary>Max number of threads to use for log restores and database initialization (each can use up to MaxThreads)</summary>
         public static readonly int MaxThreads;
 
+        #endregion
 
+        /// <summary>
+        /// Read the json configuration file and set values
+        /// </summary>
         static Config()
         {
             try
@@ -85,7 +169,7 @@ namespace LogShippingService
                 }
                 if (!string.IsNullOrEmpty(SASToken) && !EncryptionHelper.IsEncrypted(SASToken))
                 {
-                    if (!SASToken.StartsWith("?"))
+                    if (!SASToken.StartsWith('?'))
                     {
                         Log.Information("Adding ? to SAS Token");
                         SASToken = "?" + SASToken;
@@ -169,6 +253,13 @@ namespace LogShippingService
             }
         }
 
+        /// <summary>
+        /// Update the value of a key in the config file.  e.g. Replace SASToken with encrypted value
+        /// </summary>
+        /// <param name="section">Section.  e.g. Config</param>
+        /// <param name="key">Key.  e.g. SASToken</param>
+        /// <param name="value">New value for key</param>
+        /// <exception cref="InvalidOperationException"></exception>
         private static void Update(string section, string key, string value)
         {
             var json = File.ReadAllText(ConfigFile);
