@@ -15,8 +15,6 @@ namespace LogShippingService
             {
                 if (string.IsNullOrEmpty(Config.FullBackupPathTemplate)) return false;
                 if (!Config.FullBackupPathTemplate.Contains(Config.DatabaseToken)) return false;
-                Log.Information("New DBs initialized from {type} every {interval} mins.", DeviceType,
-                    Config.PollForNewDatabasesFrequency);
                 return true;
             }
         }

@@ -12,12 +12,31 @@ using SerilogTimings;
 using System.ServiceProcess;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.FileProviders.Physical;
+using static LogShippingService.BackupHeader;
 
 namespace LogShippingService
 {
     public class DatabaseInitializerFromMSDB: DatabaseInitializerBase
     {
-        public override bool IsValidated => !string.IsNullOrEmpty(Config.SourceConnectionString);
+        public override bool IsValidated
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(Config.SourceConnectionString))
+                {
+                    return false;
+                }
+                if (Config.UsePollForNewDatabasesCron)
+                {
+                    Log.Information("New DBs initialized from msdb history on cron schedule: {cron}", Config.PollForNewDatabasesCron);
+                }
+                else
+                {
+                    Log.Information("New DBs initialized from msdb history every {interval} mins.", Config.PollForNewDatabasesFrequency);
+                }
+                return true;
+            }
+        }
 
         /// <summary>
         /// Check for new DBs in the source connection that don't exist in the destination.  

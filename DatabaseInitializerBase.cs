@@ -59,9 +59,11 @@ namespace LogShippingService
                 return;
             }
 
+            long i = 0;
             while (!stoppingToken.IsCancellationRequested)
             {
-                await Waiter.WaitUntilActiveHours(stoppingToken);
+                await WaitForNextInitialization(i, stoppingToken);
+                i++;
                 if (stoppingToken.IsCancellationRequested) return;
                 try
                 {
@@ -74,7 +76,7 @@ namespace LogShippingService
                 }
                 try
                 {
-                    using (var op = Operation.Begin("Initialize new databases"))
+                    using (var op = Operation.Begin($"Initialize new databases iteration {i}"))
                     {
                         PollForNewDBs(stoppingToken);
                         op.Complete();
@@ -94,6 +96,35 @@ namespace LogShippingService
             }
             Log.Information("Poll for new DBs is shutdown");
             IsStopped = true;
+        }
+
+        /// <summary>
+        /// Wait for the required time before starting the next iteration.  Either a delay in milliseconds or a cron schedule can be used.  Also waits until active hours if configured.
+        /// </summary>
+        private static async Task WaitForNextInitialization(long count, CancellationToken stoppingToken)
+        {
+            var nextIterationStart = DateTime.Now.AddMinutes(Config.PollForNewDatabasesFrequency);
+            if (Config.UsePollForNewDatabasesCron)
+            {
+                var next = Config.PollForNewDatabasesCronExpression?.GetNextOccurrence(DateTimeOffset.Now, TimeZoneInfo.Local);
+                if (next.HasValue) // null can be returned if the value is unreachable. e.g. 30th Feb.  It's not expected, but log a warning and fall back to default delay if it happens.
+                {
+                    nextIterationStart = next.Value.DateTime;
+                }
+                else
+                {
+                    Log.Warning("No next occurrence found for PollForNewDatabasesCron.  Using default delay. {Delay}mins",Config.PollForNewDatabasesFrequency);
+                }
+            }
+
+            if (Config.UsePollForNewDatabasesCron ||
+                count > 0) // Only apply delay on first iteration if using a cron schedule
+            {
+                Log.Information("Next new database initialization will start at {nextIterationStart}", nextIterationStart);
+                await Waiter.WaitUntilTime(nextIterationStart, stoppingToken);
+            }
+            // If active hours are configured, wait until the next active period
+            await Waiter.WaitUntilActiveHours(stoppingToken);
         }
 
         protected static void ProcessRestore(string db, List<string> fullFiles, List<string> diffFiles, BackupHeader.DeviceTypes deviceType)
