@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using Cronos;
+using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
 using Serilog;
 using System.ComponentModel.DataAnnotations;
@@ -7,27 +8,31 @@ namespace LogShippingService
 {
     internal static class Config
     {
+        // Azure
         public static readonly string? ContainerURL;
         public static readonly string? SASToken;
+        // Basic Config
         public static readonly string ConnectionString;
-        public static readonly int MaxThreads;
         public static readonly string? LogFilePathTemplate;
+        //Schedule
         public static readonly int IterationDelayMs;
+        public static string? LogRestoreScheduleCron;
+        public static bool UseLogRestoreScheduleCron => !string.IsNullOrEmpty(LogRestoreScheduleCron) && LogRestoreCron!=null;
+        public static CronExpression? LogRestoreCron;
         public static readonly int OffSetMins;
         public static readonly int MaxProcessingTimeMins;
-        public static readonly string DatabaseToken = "{DatabaseName}";
-        private const string ConfigFile = "appsettings.json";
+        public static List<int> Hours;
+        public static int PollForNewDatabasesFrequency;
+        //Standby
         public static readonly string? StandbyFileName;
         public static bool KillUserConnections;
         public static int KillUserConnectionsWithRollBackAfter;
-        public static List<int> Hours;
+        // Initialization
+        public static string? FullBackupPathTemplate;
+        public static string? DiffBackupPathTemplate;
         public static List<string> IncludedDatabases;
         public static List<string> ExcludedDatabases;
         public static string? SourceConnectionString;
-        public static int PollForNewDatabasesFrequency;
-        public static bool CheckHeaders;
-        public static string? FullBackupPathTemplate;
-        public static string? DiffBackupPathTemplate;
         public static bool InitializeSimple;
         public static int MaxBackupAgeForInitialization;
         public static string? MoveDataFolder;
@@ -37,6 +42,12 @@ namespace LogShippingService
         public static bool RecoverPartialBackupWithoutReadOnly;
         public static string? MSDBPathFind;
         public static string? MSDBPathReplace;
+        // Options
+        public static readonly string DatabaseToken = "{DatabaseName}";
+        private const string ConfigFile = "appsettings.json";
+        public static bool CheckHeaders;
+        public static readonly int MaxThreads;
+
 
         static Config()
         {
@@ -119,6 +130,20 @@ namespace LogShippingService
                 RecoverPartialBackupWithoutReadOnly = bool.Parse(configuration["Config:RecoverPartialBackupWithoutReadOnly"] ?? false.ToString());
                 MSDBPathFind = configuration["Config:MSDBPathFind"];
                 MSDBPathReplace = configuration["Config:MSDBPathReplace"];
+                LogRestoreScheduleCron = configuration["Config:LogRestoreScheduleCron"];
+                if (!string.IsNullOrEmpty(LogRestoreScheduleCron))
+                {
+                    try
+                    {
+                        LogRestoreCron = CronExpression.Parse(LogRestoreScheduleCron);
+                        Log.Information("Using log restore Cron schedule: {cron}", LogRestoreScheduleCron);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Error parsing LogRestoreScheduleCron");
+                        throw;
+                    }
+                }
             }
             catch (Exception ex)
             {

@@ -8,6 +8,7 @@ using System.ComponentModel;
 using System.Data;
 using System.Numerics;
 using Microsoft.Extensions.Hosting;
+using System.Linq.Expressions;
 
 namespace LogShippingService
 {
@@ -69,31 +70,62 @@ namespace LogShippingService
  
         private async Task StartProcessing(CancellationToken stoppingToken)
         {
-            
-            long i = 1;
+            long i = 0;
             while (!stoppingToken.IsCancellationRequested)
             {
-                Log.Information("Starting iteration {0}", i);
-                try
-                {
-                   await Process(stoppingToken);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Unexpected error processing log restores");
-                }
-
-                var nextIterationStart = DateTime.Now.AddMilliseconds(Config.IterationDelayMs);
-                Log.Information(
-                    $"Iteration {i} Completed.  Next iteration will start at {nextIterationStart}");
-                while (DateTime.Now < nextIterationStart && !stoppingToken.IsCancellationRequested)
-                {
-                    await Task.Delay(100,stoppingToken);
-                }
+                await WaitForNextIteration(i, stoppingToken);
                 i++;
-                await Waiter.WaitUntilActiveHours(stoppingToken);
+                using (Operation.Time($"Iteration {i}"))
+                {
+                    Log.Information("Starting iteration {0}", i);
+                    try
+                    {
+                        await Process(stoppingToken);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Unexpected error processing log restores");
+                    }
+                }
             }
             Log.Information("Finished processing LOG restores");
+        }
+
+        /// <summary>
+        /// Wait for the required time before starting the next iteration.  Either a delay in milliseconds or a cron schedule can be used.  Also waits until active hours if configured.
+        /// </summary>
+        private static async Task WaitForNextIteration(long count, CancellationToken stoppingToken)
+        {
+            var nextIterationStart = DateTime.Now.AddMilliseconds(Config.IterationDelayMs);
+            if (Config.UseLogRestoreScheduleCron)
+            {
+                var next = Config.LogRestoreCron?.GetNextOccurrence(DateTimeOffset.Now, TimeZoneInfo.Local);
+                if (next.HasValue) // null can be returned if the value is unreachable. e.g. 30th Feb.  It's not expected, but log a warning and fall back to default delay if it happens.
+                {
+                    nextIterationStart = next.Value.DateTime;
+                }
+                else
+                {
+                    Log.Warning("No next occurrence found for LogRestoreScheduleCron.  Using default delay.");
+                }
+            }
+
+            if (Config.UseLogRestoreScheduleCron ||
+                count > 0) // Only apply delay on first iteration if using a cron schedule
+            {
+                Log.Information("Next iteration will start at {nextIterationStart}", nextIterationStart);
+                int delayMilliseconds;
+                do
+                {
+                    // Calculate how long to wait based on when we want the next iteration to start. If we need to wait longer than int.MaxValue (24.8 days), the process will loop. 
+                    delayMilliseconds =
+                        (int)Math.Min((nextIterationStart - DateTime.Now).TotalMilliseconds, int.MaxValue); 
+                    if(delayMilliseconds<=0) break;
+                    await Task.Delay(delayMilliseconds, stoppingToken);
+                } while (delayMilliseconds == int.MaxValue && nextIterationStart > DateTime.Now); // Not expected to loop - only if we overflowed the int.MaxValue (24.8 days)
+            }
+            // If active hours are configured, wait until the next active period
+            await Waiter.WaitUntilActiveHours(stoppingToken);
         }
 
         public void Stop()
