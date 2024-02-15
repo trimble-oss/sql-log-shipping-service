@@ -125,7 +125,7 @@ Note: If you are using PARTIAL backups, check sys.master_files for any files in 
 
 #### Polling Frequency for new DBs
 
-You can adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min).  
+You can adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min). Or you can use **PollForNewDatabasesCron** instead if you want to use a cron expression for more advanced scheduling.
 
 #### Initialize Simple recovery DBs
 
@@ -155,15 +155,25 @@ If you need to adjust the file paths for the initial restore the **MoveDataFolde
 
 The log shipping service works by looping through all the databases in parallel (Limited by **MaxThreads**) then waiting a period of time to start the next iteration.  You can control the delay between iterations with **DelayBetweenIterationsMs**.  If a single database has a large volume of log backups to restore it could delay the start of the next iteration.  The **MaxProcessingTimeMins** can be used to control the maximum amount of time to spend processing log restores for a single database.  
 
-
-**Azure**
 ```json
   "Config": {
+    "PollForNewDatabasesFrequency" : 10,
     "DelayBetweenIterationsMs": 10000,
     "MaxProcessingTimeMins":  60,
     //..
   }
 ```
+
+If you want more control over when log restores run.  e.g. On the hour, every hour, use the **LogRestoreScheduleCron** instead of **DelayBetweenIterationsMs**.  Also use **PollForNewDatabasesCron** instead of **PollForNewDatabasesFrequency"** if you want to use a cron schedule for new database initialization.
+
+```json
+  "Config": {
+    "LogRestoreScheduleCron": "0 * * * *",
+    "PollForNewDatabasesCron": "0 * * * *",
+    //..
+  }
+```
+*This project uses [Cronos](https://github.com/HangfireIO/Cronos) to calculate the next run date from the cron expression.*
 
 ## Other
 
@@ -217,7 +227,7 @@ Header verification is done by default using RESTORE HEADERONLY to validate the 
 
 If you want to be able to query the databases, add the **StandbyFileName** to the Config section of **appsettings.json**.  This should be a file path that contains the template **{DatabaseName}** to be replaced with the database name.
 
-You can also adjust the **Hours** to control when database restores take place (Allowing time periods where the database is available for user queries).  The example below will allow the database to be available between 9:00 and 16:59 (Missing 9-16).  The **DelayBetweenIterationsMs** could also be adjusted.
+You can also adjust the **Hours** to control when database restores take place (Allowing time periods where the database is available for user queries).  The example below will allow the database to be available between 9:00 and 16:59 (Missing 9-16).  The **PollForNewDatabaseFrequency** is used to control how often new databases are initialized.
 
 If users are able to query the log shipped databases, their connections can prevent future restore operations.  The default is to KILL user connections after 60 seconds.  This can be adjusted with **KillUserConnections** and **KillUserConnectionsWithRollbackAfter**.
 
@@ -225,7 +235,6 @@ If users are able to query the log shipped databases, their connections can prev
   "Config": {
     "StandbyFileName": "D:\\Standby\\{DatabaseName}_Standby.BAK",
     "Hours": [0, 1, 2, 3, 4, 5, 6, 7, 8, 17, 18, 19, 20, 21, 22, 23],
-    "DelayBetweenIterationsMs": 10000,
     "KillUserConnections": true,
     "KillUserConnectionsWithRollBackAfter": 60
     //...
