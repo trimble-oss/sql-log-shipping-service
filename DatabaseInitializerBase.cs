@@ -86,13 +86,6 @@ namespace LogShippingService
                 {
                     Log.Error(ex, "Error running poll for new DBs");
                 }
-
-                var nextIterationStart = DateTime.Now.AddMinutes(Config.PollForNewDatabasesFrequency);
-
-                while (DateTime.Now < nextIterationStart && !stoppingToken.IsCancellationRequested)
-                {
-                   await Task.Delay(100,stoppingToken);
-                }
             }
             Log.Information("Poll for new DBs is shutdown");
             IsStopped = true;

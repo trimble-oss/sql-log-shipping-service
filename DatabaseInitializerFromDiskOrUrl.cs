@@ -15,6 +15,14 @@ namespace LogShippingService
             {
                 if (string.IsNullOrEmpty(Config.FullBackupPathTemplate)) return false;
                 if (!Config.FullBackupPathTemplate.Contains(Config.DatabaseToken)) return false;
+                if (Config.UsePollForNewDatabasesCron)
+                {
+                    Log.Information("New DBs initialized from {type} on cron schedule: {cron}",DeviceType, Config.PollForNewDatabasesCron);
+                }
+                else
+                {
+                    Log.Information("New DBs initialized from {type} every {interval} mins.",DeviceType, Config.PollForNewDatabasesFrequency);
+                }
                 return true;
             }
         }
