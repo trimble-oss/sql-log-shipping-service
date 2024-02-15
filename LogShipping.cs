@@ -223,7 +223,7 @@ namespace LogShippingService
             }
         }
 
-        private Task RestoreLogs(List<string> logFiles, string db,bool reProcess, CancellationToken stoppingToken)
+        private static Task RestoreLogs(List<string> logFiles, string db,bool reProcess, CancellationToken stoppingToken)
         {
             BigInteger? redoStartOrPreviousLastLSN = null;
             if (Config.CheckHeaders)
