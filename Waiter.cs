@@ -28,6 +28,19 @@ namespace LogShippingService
 
         }
 
+        public static async Task WaitUntilTime(DateTime waitUntil, CancellationToken stoppingToken)
+        {
+            int delayMilliseconds;
+            do
+            {
+                // Calculate how long to wait based on when we want the next iteration to start. If we need to wait longer than int.MaxValue (24.8 days), the process will loop. 
+                delayMilliseconds =
+                    (int)Math.Min((waitUntil - DateTime.Now).TotalMilliseconds, int.MaxValue);
+                if (delayMilliseconds <= 0) break;
+                await Task.Delay(delayMilliseconds, stoppingToken);
+            } while (delayMilliseconds == int.MaxValue && waitUntil > DateTime.Now && !stoppingToken.IsCancellationRequested); // Not expected to loop - only if we overflowed the int.MaxValue (24.8 days)
+        }
+
         public static bool CanRestoreLogsNow => Config.Hours.Contains(DateTime.Now.Hour);
 
     }

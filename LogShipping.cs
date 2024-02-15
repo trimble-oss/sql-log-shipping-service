@@ -28,7 +28,14 @@ namespace LogShippingService
             }
             if (!string.IsNullOrEmpty(Config.SourceConnectionString))
             {
-                Log.Information("New DBs initialized from msdb history last backup every {interval} mins.", Config.PollForNewDatabasesFrequency);
+                if (Config.UsePollForNewDatabasesCron)
+                {
+                    Log.Information("New DBs initialized from msdb history on cron schedule: {cron}", Config.PollForNewDatabasesCron);
+                }
+                else
+                {
+                    Log.Information("New DBs initialized from msdb history every {interval} mins.", Config.PollForNewDatabasesFrequency);
+                }
                 _initializer = new DatabaseInitializerFromMSDB();
             }
             else
@@ -75,9 +82,9 @@ namespace LogShippingService
             {
                 await WaitForNextIteration(i, stoppingToken);
                 i++;
-                using (Operation.Time($"Iteration {i}"))
+                using (Operation.Time($"Log restore iteration {i}"))
                 {
-                    Log.Information("Starting iteration {0}", i);
+                    Log.Information("Starting log restore iteration {0}", i);
                     try
                     {
                         await Process(stoppingToken);
@@ -113,16 +120,8 @@ namespace LogShippingService
             if (Config.UseLogRestoreScheduleCron ||
                 count > 0) // Only apply delay on first iteration if using a cron schedule
             {
-                Log.Information("Next iteration will start at {nextIterationStart}", nextIterationStart);
-                int delayMilliseconds;
-                do
-                {
-                    // Calculate how long to wait based on when we want the next iteration to start. If we need to wait longer than int.MaxValue (24.8 days), the process will loop. 
-                    delayMilliseconds =
-                        (int)Math.Min((nextIterationStart - DateTime.Now).TotalMilliseconds, int.MaxValue); 
-                    if(delayMilliseconds<=0) break;
-                    await Task.Delay(delayMilliseconds, stoppingToken);
-                } while (delayMilliseconds == int.MaxValue && nextIterationStart > DateTime.Now); // Not expected to loop - only if we overflowed the int.MaxValue (24.8 days)
+                Log.Information("Next log restore iteration will start at {nextIterationStart}", nextIterationStart);
+                await Waiter.WaitUntilTime(nextIterationStart, stoppingToken);
             }
             // If active hours are configured, wait until the next active period
             await Waiter.WaitUntilActiveHours(stoppingToken);

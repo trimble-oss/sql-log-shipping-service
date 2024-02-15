@@ -23,6 +23,9 @@ namespace LogShippingService
         public static readonly int MaxProcessingTimeMins;
         public static List<int> Hours;
         public static int PollForNewDatabasesFrequency;
+        public static string? PollForNewDatabasesCron;
+        public static CronExpression? PollForNewDatabasesCronExpression;
+        public static bool UsePollForNewDatabasesCron => !string.IsNullOrEmpty(PollForNewDatabasesCron) && PollForNewDatabasesCronExpression!=null;
         //Standby
         public static readonly string? StandbyFileName;
         public static bool KillUserConnections;
@@ -141,6 +144,20 @@ namespace LogShippingService
                     catch (Exception ex)
                     {
                         Log.Error(ex, "Error parsing LogRestoreScheduleCron");
+                        throw;
+                    }
+                }
+                PollForNewDatabasesCron = configuration["Config:PollForNewDatabasesCron"];
+                if (!string.IsNullOrEmpty(PollForNewDatabasesCron))
+                {
+                    try
+                    {
+                        PollForNewDatabasesCronExpression= CronExpression.Parse(PollForNewDatabasesCron);
+                        Log.Information("Initializing new databases on Cron schedule: {cron}", PollForNewDatabasesCron);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Error parsing PollForNewDatabasesCron");
                         throw;
                     }
                 }
