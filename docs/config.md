@@ -125,7 +125,7 @@ Note: If you are using PARTIAL backups, check sys.master_files for any files in 
 
 #### Polling Frequency for new DBs
 
-You can adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 1min). Or you can use **PollForNewDatabasesCron** instead if you want to use a cron expression for more advanced scheduling.
+You can adjust the frequency it polls for new databases using **PollForNewDatabasesFrequency** (Specify a time in minutes.  Default 10min). Or you can use **PollForNewDatabasesCron** instead if you want to use a cron expression for more advanced scheduling.
 
 #### Initialize Simple recovery DBs
 
