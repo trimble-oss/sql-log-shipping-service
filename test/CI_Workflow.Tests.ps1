@@ -6,7 +6,7 @@ Describe 'CI Workflow checks' {
     }
     It '2 logical backups in same physical file check' {
         # LogShipping1_2.trn as 2 logical backups.  If LogShipping1_3.trn is restored, then we handled it OK
-         $results= Invoke-Sqlcmd -ServerInstance "LOCALHOST" -TrustServerCertificate -Query "SELECT TOP(1) bmf.physical_device_name AS LastLogFile
+         $results= Invoke-DbaQuery -SqlInstance "LOCALHOST" -As PSObject -Query "SELECT TOP(1) bmf.physical_device_name AS LastLogFile
          FROM msdb.dbo.restorehistory rsh
          INNER JOIN msdb.dbo.backupset bs ON rsh.backup_set_id = bs.backup_set_id
          INNER JOIN msdb.dbo.restorefile rf ON rsh.restore_history_id = rf.restore_history_id
