@@ -131,6 +131,8 @@ namespace LogShippingService
         /// <summary>Max number of threads to use for log restores and database initialization (each can use up to MaxThreads)</summary>
         public static readonly int MaxThreads;
 
+        public static int RestoreDelayMins;
+
         #endregion
 
         /// <summary>
@@ -218,6 +220,7 @@ namespace LogShippingService
                 MSDBPathFind = configuration["Config:MSDBPathFind"];
                 MSDBPathReplace = configuration["Config:MSDBPathReplace"];
                 LogRestoreScheduleCron = configuration["Config:LogRestoreScheduleCron"];
+                RestoreDelayMins = int.Parse(configuration["Config:RestoreDelayMins"] ?? 0.ToString());
                 if (!string.IsNullOrEmpty(LogRestoreScheduleCron))
                 {
                     try
