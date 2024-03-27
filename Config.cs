@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
 using Serilog;
 using System.ComponentModel.DataAnnotations;
+using System.Globalization;
 
 namespace LogShippingService
 {
@@ -133,6 +134,8 @@ namespace LogShippingService
 
         public static int RestoreDelayMins;
 
+        public static DateTime StopAt;
+
         #endregion
 
         /// <summary>
@@ -221,6 +224,7 @@ namespace LogShippingService
                 MSDBPathReplace = configuration["Config:MSDBPathReplace"];
                 LogRestoreScheduleCron = configuration["Config:LogRestoreScheduleCron"];
                 RestoreDelayMins = int.Parse(configuration["Config:RestoreDelayMins"] ?? 0.ToString());
+                StopAt = configuration["Config:StopAt"] ==null? DateTime.MaxValue : DateTime.Parse(configuration["Config:StopAt"]!);
                 if (!string.IsNullOrEmpty(LogRestoreScheduleCron))
                 {
                     try

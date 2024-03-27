@@ -6,9 +6,11 @@ using SerilogTimings;
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Data;
+using System.Globalization;
 using System.Numerics;
 using Microsoft.Extensions.Hosting;
 using System.Linq.Expressions;
+using System.Security.Permissions;
 
 namespace LogShippingService
 {
@@ -18,6 +20,8 @@ namespace LogShippingService
         public static ConcurrentDictionary<string, string> InitializingDBs = new();
 
         private readonly DatabaseInitializerBase? _initializer;
+
+        private static readonly object locker = new();
 
         public LogShipping()
         {
@@ -233,7 +237,8 @@ namespace LogShippingService
             }
 
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
-            bool restoreDelayFlag = false;
+            bool breakProcessingFlag = false;
+            var stopAt = Config.StopAt < DateTime.MaxValue ? ", STOPAT=" + Config.StopAt.ToString("yyyy-MM-ddTHH:mm:ss.fff").SqlSingleQuote() : "";
             foreach (var logPath in logFiles)
             {
                 if (DateTime.Now > maxTime)
@@ -251,14 +256,14 @@ namespace LogShippingService
                     Log.Information("Halt log restores for {db} due to Hours configuration", db);
                     break;
                 }
-                if (restoreDelayFlag)
+                if (breakProcessingFlag)
                 {
                     break;
                 }
 
                 var file = logPath.SqlSingleQuote();
                 var urlOrDisk = string.IsNullOrEmpty(Config.ContainerURL) ? "DISK" : "URL";
-                var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY";
+                var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY{stopAt}";
 
                 if (Config.CheckHeaders)
                 {
@@ -283,7 +288,7 @@ namespace LogShippingService
                     
                     foreach (var header in headers)
                     {
-                        sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY, FILE = {header.Position}";
+                        sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY, FILE = {header.Position}{stopAt}";
                         if (!string.Equals(header.DatabaseName, db, StringComparison.OrdinalIgnoreCase))
                         {
                             throw new HeaderVerificationException(
@@ -293,7 +298,7 @@ namespace LogShippingService
                         if (Config.RestoreDelayMins > 0 && DateTime.Now.Subtract(header.BackupFinishDate).TotalMinutes < Config.RestoreDelayMins)
                         {
                             Log.Information("Waiting to restore {logPath} & subsequent files.  Backup Finish Date: {BackupFinishDate}. Eligible for restore after {RestoreAfter}, RestoreDelayMins:{RestoreDelay}", logPath, header.BackupFinishDate, header.BackupFinishDate.AddMinutes(Config.RestoreDelayMins), Config.RestoreDelayMins);
-                            restoreDelayFlag = true;
+                            breakProcessingFlag = true;
                             break;
                         }
                         else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN == redoStartOrPreviousLastLSN)
@@ -323,7 +328,17 @@ namespace LogShippingService
                             throw new HeaderVerificationException($"Header verification failed for {logPath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
                         }
           
-                        ProcessRestoreCommand(sql,db,file);
+                        var completed = ProcessRestoreCommand(sql,db,file);
+                        if (completed && header.BackupFinishDate >= Config.StopAt)
+                        {
+                            Log.Information("StopAt target reached for {db}.  Last log: {logPath}.  Backup Finish Date: {BackupFinishDate}. StopAt: {StopAt}",db, logPath, header.BackupFinishDate, Config.StopAt);
+                            lock (locker) // Prevent future processing of this DB
+                            {
+                                Config.ExcludedDatabases.Add(db); // Exclude this DB from future processing
+                            }
+                            breakProcessingFlag = true;
+                            break;
+                        }
                         redoStartOrPreviousLastLSN = header.LastLSN;
                         
                     }
@@ -337,11 +352,12 @@ namespace LogShippingService
             return Task.CompletedTask;
         }
 
-        private static void ProcessRestoreCommand(string sql,string db,string file)
+        private static bool ProcessRestoreCommand(string sql,string db,string file)
         {
             try
             {
                 Execute(sql);
+                return true;
             }
             catch (SqlException ex) when
                 (ex.Number == 4326) // Log file is too early to apply, Log error and continue
@@ -356,8 +372,9 @@ namespace LogShippingService
             catch (SqlException ex) when
                 (ex.Number == 3101) // Exclusive access could not be obtained because the database is in use.  Kill user connections and retry.
             {
-                if (!KillUserConnections(db)) return;
+                if (!KillUserConnections(db)) return false;
                 Execute(sql);
+                return true;
             }
             catch (SqlException ex) when (ex.Number == 4319)
             {
@@ -367,12 +384,15 @@ namespace LogShippingService
                 try
                 {
                     Execute(sql);
+                    return true;
                 }
                 catch (Exception ex2)
                 {
                     Log.Error(ex2, "Error running RESTORE with RESTART option. {sql}. Skipping file and trying next in sequence.", sql);
                 }
             }
+
+            return false;
         }
 
         private static bool KillUserConnections(string db)
