@@ -233,6 +233,7 @@ namespace LogShippingService
             }
 
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
+            bool restoreDelayFlag = false;
             foreach (var logPath in logFiles)
             {
                 if (DateTime.Now > maxTime)
@@ -248,6 +249,10 @@ namespace LogShippingService
                 if (!Waiter.CanRestoreLogsNow)
                 {
                     Log.Information("Halt log restores for {db} due to Hours configuration", db);
+                    break;
+                }
+                if (restoreDelayFlag)
+                {
                     break;
                 }
 
@@ -285,7 +290,13 @@ namespace LogShippingService
                                 $"Header verification failed for {logPath}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
                         }
 
-                        if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN == redoStartOrPreviousLastLSN)
+                        if (Config.RestoreDelayMins > 0 && DateTime.Now.Subtract(header.BackupFinishDate).TotalMinutes < Config.RestoreDelayMins)
+                        {
+                            Log.Information("Waiting to restore {logPath} & subsequent files.  Backup Finish Date: {BackupFinishDate}. Eligible for restore after {RestoreAfter}, RestoreDelayMins:{RestoreDelay}", logPath, header.BackupFinishDate, header.BackupFinishDate.AddMinutes(Config.RestoreDelayMins), Config.RestoreDelayMins);
+                            restoreDelayFlag = true;
+                            break;
+                        }
+                        else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN == redoStartOrPreviousLastLSN)
                         {
                             if (reProcess) // Reprocess previous file if we got a too recent error, otherwise skip it
                             {
@@ -311,6 +322,7 @@ namespace LogShippingService
                         {
                             throw new HeaderVerificationException($"Header verification failed for {logPath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
                         }
+          
                         ProcessRestoreCommand(sql,db,file);
                         redoStartOrPreviousLastLSN = header.LastLSN;
                         
