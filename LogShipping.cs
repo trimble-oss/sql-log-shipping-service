@@ -14,18 +14,19 @@ using System.Security.Permissions;
 
 namespace LogShippingService
 {
-    internal class LogShipping: BackgroundService
+    internal class LogShipping : BackgroundService
     {
-   
         public static ConcurrentDictionary<string, string> InitializingDBs = new();
 
         private readonly DatabaseInitializerBase? _initializer;
 
         private static readonly object locker = new();
 
+        private static Config Config => AppConfig.Config;
+
         public LogShipping()
         {
-            if (string.IsNullOrEmpty(Config.LogFilePathTemplate))
+            if (string.IsNullOrEmpty(Config.LogFilePath))
             {
                 var message = "LogFilePath was not specified";
                 Log.Error(message); throw new Exception(message);
@@ -48,11 +49,10 @@ namespace LogShippingService
             }
         }
 
-
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             stoppingToken.Register(Stop);
-            var logRestoreTask= StartProcessing(stoppingToken);
+            var logRestoreTask = StartProcessing(stoppingToken);
 
             try
             {
@@ -72,13 +72,12 @@ namespace LogShippingService
             }
             catch (Exception ex)
             {
-                Log.Error(ex,"Processing stopped due to unexpected error");
+                Log.Error(ex, "Processing stopped due to unexpected error");
                 await Log.CloseAndFlushAsync();
                 Environment.Exit(1);
             }
         }
 
- 
         private async Task StartProcessing(CancellationToken stoppingToken)
         {
             long i = 0;
@@ -107,7 +106,7 @@ namespace LogShippingService
         /// </summary>
         private static async Task WaitForNextIteration(long count, CancellationToken stoppingToken)
         {
-            var nextIterationStart = DateTime.Now.AddMilliseconds(Config.IterationDelayMs);
+            var nextIterationStart = DateTime.Now.AddMilliseconds(Config.DelayBetweenIterationsMs);
             if (Config.UseLogRestoreScheduleCron)
             {
                 var next = Config.LogRestoreCron?.GetNextOccurrence(DateTimeOffset.Now, TimeZoneInfo.Local);
@@ -135,7 +134,7 @@ namespace LogShippingService
         {
             Log.Information("Initiating shutdown...");
         }
-        
+
         private Task Process(CancellationToken stoppingToken)
         {
             DataTable dt;
@@ -154,8 +153,8 @@ namespace LogShippingService
                     return;
                 }
                 var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
-                fromDate = fromDate.AddMinutes(Config.OffSetMins);
-                ProcessDatabase(db, fromDate,stoppingToken);
+                fromDate = fromDate.AddMinutes(Config.OffsetMins);
+                ProcessDatabase(db, fromDate, stoppingToken);
             });
             return Task.CompletedTask;
         }
@@ -168,7 +167,7 @@ namespace LogShippingService
             return !isExcluded && isIncluded;
         }
 
-        private void ProcessDatabase(string db, DateTime fromDate, CancellationToken stoppingToken, int processCount = 1,bool reProcess=false)
+        private void ProcessDatabase(string db, DateTime fromDate, CancellationToken stoppingToken, int processCount = 1, bool reProcess = false)
         {
             if (!IsIncludedDatabase(db))
             {
@@ -180,7 +179,7 @@ namespace LogShippingService
             {
                 try
                 {
-                    RestoreLogs(logFiles, db,reProcess,stoppingToken);
+                    RestoreLogs(logFiles, db, reProcess, stoppingToken);
                     op.Complete();
                 }
                 catch (TimeoutException ex) when (ex.Message == "Max processing time exceeded")
@@ -192,12 +191,12 @@ namespace LogShippingService
                 }
                 catch (SqlException ex) when (ex.Number == 4305)
                 {
-                    HandleTooRecent(ex, db, fromDate, processCount,stoppingToken);
+                    HandleTooRecent(ex, db, fromDate, processCount, stoppingToken);
                 }
                 catch (HeaderVerificationException ex) when (ex.VerificationStatus ==
                                                              BackupHeader.HeaderVerificationStatus.TooRecent)
                 {
-                    HandleTooRecent(ex, db, fromDate, processCount,stoppingToken);
+                    HandleTooRecent(ex, db, fromDate, processCount, stoppingToken);
                 }
                 catch (Exception ex)
                 {
@@ -213,12 +212,12 @@ namespace LogShippingService
                 // Too recent
                 case 1:
                     Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 60min.");
-                    ProcessDatabase(db, fromDate.AddMinutes(-60),stoppingToken, processCount + 1,true);
+                    ProcessDatabase(db, fromDate.AddMinutes(-60), stoppingToken, processCount + 1, true);
                     break;
 
                 case 2:
                     Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 1 day.");
-                    ProcessDatabase(db, fromDate.AddMinutes(-1440),stoppingToken, processCount + 1,true);
+                    ProcessDatabase(db, fromDate.AddMinutes(-1440), stoppingToken, processCount + 1, true);
                     break;
 
                 default:
@@ -227,18 +226,18 @@ namespace LogShippingService
             }
         }
 
-        private static Task RestoreLogs(List<string> logFiles, string db,bool reProcess, CancellationToken stoppingToken)
+        private static Task RestoreLogs(List<string> logFiles, string db, bool reProcess, CancellationToken stoppingToken)
         {
             BigInteger? redoStartOrPreviousLastLSN = null;
             if (Config.CheckHeaders)
             {
-                redoStartOrPreviousLastLSN = DataHelper.GetRedoStartLSNForDB(db, Config.ConnectionString);
+                redoStartOrPreviousLastLSN = DataHelper.GetRedoStartLSNForDB(db, Config.Destination);
                 Log.Debug("{db} Redo Start LSN: {RedoStartLSN}", db, redoStartOrPreviousLastLSN);
             }
 
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
             bool breakProcessingFlag = false;
-            var stopAt = Config.StopAt < DateTime.MaxValue ? ", STOPAT=" + Config.StopAt.ToString("yyyy-MM-ddTHH:mm:ss.fff").SqlSingleQuote() : "";
+            var stopAt = Config.StopAt > DateTime.MinValue && Config.StopAt < DateTime.MaxValue ? ", STOPAT=" + Config.StopAt.ToString("yyyy-MM-ddTHH:mm:ss.fff").SqlSingleQuote() : "";
             foreach (var logPath in logFiles)
             {
                 if (DateTime.Now > maxTime)
@@ -262,7 +261,7 @@ namespace LogShippingService
                 }
 
                 var file = logPath.SqlSingleQuote();
-                var urlOrDisk = string.IsNullOrEmpty(Config.ContainerURL) ? "DISK" : "URL";
+                var urlOrDisk = string.IsNullOrEmpty(Config.ContainerUrl) ? "DISK" : "URL";
                 var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY{stopAt}";
 
                 if (Config.CheckHeaders)
@@ -270,22 +269,22 @@ namespace LogShippingService
                     List<BackupHeader> headers;
                     try
                     {
-                        headers = BackupHeader.GetHeaders(logPath, Config.ConnectionString,
-                            string.IsNullOrEmpty(Config.ContainerURL)
+                        headers = BackupHeader.GetHeaders(logPath, Config.Destination,
+                            string.IsNullOrEmpty(Config.ContainerUrl)
                                 ? BackupHeader.DeviceTypes.Disk
                                 : BackupHeader.DeviceTypes.Url);
                     }
                     catch (SqlException ex)
                     {
-                        Log.Error(ex,"Error reading backup header for {logPath}.  Skipping file.",ex);
+                        Log.Error(ex, "Error reading backup header for {logPath}.  Skipping file.", ex);
                         continue;
                     }
 
                     if (headers.Count > 1) // Multiple logical backups in single file. This is now handled, but log a warning as it's unexpected.
                     {
-                        Log.Warning("Log File {logPath} contains {count} backups.  Expected 1, but each will be processed.",logPath,headers.Count);
+                        Log.Warning("Log File {logPath} contains {count} backups.  Expected 1, but each will be processed.", logPath, headers.Count);
                     }
-                    
+
                     foreach (var header in headers)
                     {
                         sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY, FILE = {header.Position}{stopAt}";
@@ -305,18 +304,18 @@ namespace LogShippingService
                         {
                             if (reProcess) // Reprocess previous file if we got a too recent error, otherwise skip it
                             {
-                                Log.Information("Re-processing {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath,header.Position, header.FirstLSN, header.LastLSN);
+                                Log.Information("Re-processing {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.Position, header.FirstLSN, header.LastLSN);
                                 continue;
                             }
                             else
                             {
-                                Log.Information("Skipping {logPath}, FILE={Position}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath,header.Position, header.FirstLSN, header.LastLSN);
+                                Log.Information("Skipping {logPath}, FILE={Position}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.Position, header.FirstLSN, header.LastLSN);
                                 continue;
                             }
                         }
                         else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN > redoStartOrPreviousLastLSN)
                         {
-                            Log.Information("Header verification successful for {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath,header.Position, header.FirstLSN, header.LastLSN);
+                            Log.Information("Header verification successful for {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.Position, header.FirstLSN, header.LastLSN);
                         }
                         else if (header.FirstLSN < redoStartOrPreviousLastLSN)
                         {
@@ -327,11 +326,11 @@ namespace LogShippingService
                         {
                             throw new HeaderVerificationException($"Header verification failed for {logPath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
                         }
-          
-                        var completed = ProcessRestoreCommand(sql,db,file);
-                        if (completed && header.BackupFinishDate >= Config.StopAt)
+
+                        var completed = ProcessRestoreCommand(sql, db, file);
+                        if (completed && Config.StopAt != DateTime.MinValue && header.BackupFinishDate >= Config.StopAt)
                         {
-                            Log.Information("StopAt target reached for {db}.  Last log: {logPath}.  Backup Finish Date: {BackupFinishDate}. StopAt: {StopAt}",db, logPath, header.BackupFinishDate, Config.StopAt);
+                            Log.Information("StopAt target reached for {db}.  Last log: {logPath}.  Backup Finish Date: {BackupFinishDate}. StopAt: {StopAt}", db, logPath, header.BackupFinishDate, Config.StopAt);
                             lock (locker) // Prevent future processing of this DB
                             {
                                 Config.ExcludedDatabases.Add(db); // Exclude this DB from future processing
@@ -340,19 +339,18 @@ namespace LogShippingService
                             break;
                         }
                         redoStartOrPreviousLastLSN = header.LastLSN;
-                        
                     }
                 }
                 else
                 {
-                    ProcessRestoreCommand(sql, db,file);
+                    ProcessRestoreCommand(sql, db, file);
                 }
             }
             RestoreWithStandby(db);
             return Task.CompletedTask;
         }
 
-        private static bool ProcessRestoreCommand(string sql,string db,string file)
+        private static bool ProcessRestoreCommand(string sql, string db, string file)
         {
             try
             {
@@ -401,10 +399,10 @@ namespace LogShippingService
             {
                 var sql = $"IF DATABASEPROPERTYEX({db.SqlSingleQuote()},'IsInStandBy')=1\n";
                 sql += "BEGIN\n";
-                sql += $"\tALTER DATABASE {db.SqlQuote()} SET SINGLE_USER WITH ROLLBACK AFTER {Config.KillUserConnectionsWithRollBackAfter}\n";
+                sql += $"\tALTER DATABASE {db.SqlQuote()} SET SINGLE_USER WITH ROLLBACK AFTER {Config.KillUserConnectionsWithRollbackAfter}\n";
                 sql += $"\tRESTORE DATABASE {db.SqlQuote()} WITH NORECOVERY\n";
                 sql += "END\n";
-                Log.Warning("User connections to {db} are preventing restore operations.  Sessions will be killed after {seconds}. {sql}", db, Config.KillUserConnectionsWithRollBackAfter, sql);
+                Log.Warning("User connections to {db} are preventing restore operations.  Sessions will be killed after {seconds}. {sql}", db, Config.KillUserConnectionsWithRollbackAfter, sql);
                 try
                 {
                     Execute(sql);
@@ -440,12 +438,12 @@ namespace LogShippingService
 
         private static void Execute(string sql)
         {
-            DataHelper.ExecuteWithTiming(sql, Config.ConnectionString);
+            DataHelper.ExecuteWithTiming(sql, Config.Destination);
         }
 
         public static DataTable GetDatabases()
         {
-            using var cn = new SqlConnection(Config.ConnectionString);
+            using var cn = new SqlConnection(Config.Destination);
             using var cmd = new SqlCommand(SqlStrings.GetDatabases, cn) { CommandTimeout = 0 };
             using var da = new SqlDataAdapter(cmd);
             var dt = new DataTable();
@@ -455,12 +453,12 @@ namespace LogShippingService
 
         private static List<string> GetFilesForDb(string db, DateTime fromDate)
         {
-            var path = Config.LogFilePathTemplate!.Replace(Config.DatabaseToken, db);
+            var path = Config.LogFilePath!.Replace(Config.DatabaseToken, db);
             List<string> logFiles;
-            if (string.IsNullOrEmpty(Config.ContainerURL))
+            if (string.IsNullOrEmpty(Config.ContainerUrl))
             {
                 using (var op = Operation.Begin("Get logs for {DatabaseName} after {date} (Offset:{offset}) from {path}", db,
-                           fromDate, Config.OffSetMins, path))
+                           fromDate, Config.OffsetMins, path))
                 {
                     logFiles = GetFilesForDbUnc(path, fromDate);
                     op.Complete();
@@ -468,7 +466,7 @@ namespace LogShippingService
             }
             else
             {
-                using (var op = Operation.Begin("Query Azure Blob for {DatabaseName} after {date} (Offset:{offset}):{prefix}", db, fromDate, Config.OffSetMins, path))
+                using (var op = Operation.Begin("Query Azure Blob for {DatabaseName} after {date} (Offset:{offset}):{prefix}", db, fromDate, Config.OffsetMins, path))
                 {
                     logFiles = GetFilesForDbAzBlob(path, fromDate);
                     op.Complete();
@@ -482,7 +480,7 @@ namespace LogShippingService
             var files = new DirectoryInfo(path)
                 .GetFiles("*.trn", SearchOption.AllDirectories)
                 .Where(file => file.LastWriteTime > fromDate)
-                .OrderBy(f=>f.LastWriteTime)
+                .OrderBy(f => f.LastWriteTime)
                 .Select(file => file.FullName)
                 .ToList();
 
@@ -491,14 +489,14 @@ namespace LogShippingService
 
         public static List<string> GetFilesForDbAzBlob(string prefix, DateTime fromDate)
         {
-            var containerUri = new Uri(Config.ContainerURL + Config.SASToken);
+            var containerUri = new Uri(Config.ContainerUrl + Config.SASToken);
             var containerClient = new BlobContainerClient(containerUri);
 
             var filteredBlobs = containerClient
                 .GetBlobs(BlobTraits.Metadata, BlobStates.None, prefix)
                 .Where(blobItem => blobItem.Properties.LastModified > fromDate)
                 .OrderBy(blobItem => blobItem.Properties.LastModified)
-                .Select(blobItem => Config.ContainerURL + "/" + blobItem.Name)
+                .Select(blobItem => Config.ContainerUrl + "/" + blobItem.Name)
                 .ToList();
 
             return filteredBlobs;

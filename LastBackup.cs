@@ -15,6 +15,8 @@ namespace LogShippingService
         public DateTime BackupFinishDate = DateTime.MinValue;
         public BackupHeader.BackupTypes BackupType { get; private set; }
 
+        private static Config Config => AppConfig.Config;
+
         public LastBackup(string databaseName, string connectionString, BackupHeader.BackupTypes type)
         {
             BackupType = type;
@@ -37,16 +39,16 @@ namespace LogShippingService
 
         public void Restore()
         {
-            Dictionary<string, string>? moves=null;
+            Dictionary<string, string>? moves = null;
             if (BackupType == BackupHeader.BackupTypes.DatabaseFull)
             {
-                moves = DataHelper.GetFileMoves(FileList, DeviceType, Config.ConnectionString,
+                moves = DataHelper.GetFileMoves(FileList, DeviceType, Config.Destination,
                     Config.MoveDataFolder,
                     Config.MoveLogFolder, Config.MoveFileStreamFolder);
             }
 
             var sql = GetRestoreDbScript(moves);
-            DataHelper.ExecuteWithTiming(sql, Config.ConnectionString);
+            DataHelper.ExecuteWithTiming(sql, Config.Destination);
         }
 
         /// <summary>
@@ -81,7 +83,7 @@ namespace LogShippingService
 
         public string GetFileListOnlyScript() => DataHelper.GetFileListOnlyScript(FileList, DeviceType);
 
-        public string GetRestoreDbScript(Dictionary<string,string>?moves) => DataHelper.GetRestoreDbScript(FileList, DatabaseName, DeviceType, BackupType == BackupHeader.BackupTypes.DatabaseFull,moves);
+        public string GetRestoreDbScript(Dictionary<string, string>? moves) => DataHelper.GetRestoreDbScript(FileList, DatabaseName, DeviceType, BackupType == BackupHeader.BackupTypes.DatabaseFull, moves);
 
         internal static DataTable GetFilesForLastBackup(string db, char backupType, string connectionString)
         {

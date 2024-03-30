@@ -11,7 +11,9 @@ namespace LogShippingService
 
         protected abstract void DoProcessDB(string db);
 
-        protected void ProcessDB(string db,CancellationToken stoppingToken)
+        private static Config Config => AppConfig.Config;
+
+        protected void ProcessDB(string db, CancellationToken stoppingToken)
         {
             if (!IsValidForInitialization(db)) return;
             if (stoppingToken.IsCancellationRequested) return;
@@ -37,7 +39,6 @@ namespace LogShippingService
         }
 
         protected List<DatabaseInfo>? DestinationDBs;
-
 
         public bool IsStopped { get; private set; }
 
@@ -67,7 +68,7 @@ namespace LogShippingService
                 if (stoppingToken.IsCancellationRequested) return;
                 try
                 {
-                    DestinationDBs = DatabaseInfo.GetDatabaseInfo(Config.ConnectionString);
+                    DestinationDBs = DatabaseInfo.GetDatabaseInfo(Config.Destination);
                 }
                 catch (Exception ex)
                 {
@@ -106,7 +107,7 @@ namespace LogShippingService
                 }
                 else
                 {
-                    Log.Warning("No next occurrence found for PollForNewDatabasesCron.  Using default delay. {Delay}mins",Config.PollForNewDatabasesFrequency);
+                    Log.Warning("No next occurrence found for PollForNewDatabasesCron.  Using default delay. {Delay}mins", Config.PollForNewDatabasesFrequency);
                 }
             }
 
@@ -122,7 +123,7 @@ namespace LogShippingService
 
         protected static void ProcessRestore(string db, List<string> fullFiles, List<string> diffFiles, BackupHeader.DeviceTypes deviceType)
         {
-            var fullHeader = BackupHeader.GetHeaders(fullFiles, Config.ConnectionString, deviceType);
+            var fullHeader = BackupHeader.GetHeaders(fullFiles, Config.Destination, deviceType);
 
             if (fullHeader.Count > 1)
             {
@@ -153,23 +154,23 @@ namespace LogShippingService
                 Log.Warning("Warning. Initializing {db} from a PARTIAL backup. Additional steps might be required to restore READONLY filegroups.  Check sys.master_files to ensure no files are in RECOVERY_PENDING state.", db);
             }
 
-            var moves = DataHelper.GetFileMoves(fullFiles, deviceType, Config.ConnectionString, Config.MoveDataFolder, Config.MoveLogFolder,
+            var moves = DataHelper.GetFileMoves(fullFiles, deviceType, Config.Destination, Config.MoveDataFolder, Config.MoveLogFolder,
                 Config.MoveFileStreamFolder);
             var restoreScript = DataHelper.GetRestoreDbScript(fullFiles, db, deviceType, true, moves);
             // Restore FULL
-            DataHelper.ExecuteWithTiming(restoreScript, Config.ConnectionString);
+            DataHelper.ExecuteWithTiming(restoreScript, Config.Destination);
 
             if (diffFiles.Count <= 0) return;
 
             // Check header for DIFF
             var diffHeader =
-                BackupHeader.GetHeaders(diffFiles, Config.ConnectionString, deviceType);
+                BackupHeader.GetHeaders(diffFiles, Config.Destination, deviceType);
 
             if (IsDiffApplicable(fullHeader, diffHeader))
             {
                 // Restore DIFF is applicable
                 restoreScript = DataHelper.GetRestoreDbScript(diffFiles, db, deviceType, false);
-                DataHelper.ExecuteWithTiming(restoreScript, Config.ConnectionString);
+                DataHelper.ExecuteWithTiming(restoreScript, Config.Destination);
             }
         }
 
@@ -184,8 +185,7 @@ namespace LogShippingService
 
         public static bool IsDiffApplicable(BackupHeader full, BackupHeader diff) => full.CheckpointLSN == diff.DifferentialBaseLSN && full.BackupSetGUID == diff.DifferentialBaseGUID && diff.BackupType is BackupHeader.BackupTypes.DatabaseDiff or BackupHeader.BackupTypes.PartialDiff;
 
-
-        protected static bool ValidateHeader(BackupFile file,string db,ref Guid backupSetGuid, BackupTypes backupType)
+        protected static bool ValidateHeader(BackupFile file, string db, ref Guid backupSetGuid, BackupTypes backupType)
         {
             if (file.Headers is { Count: 1 })
             {
@@ -218,6 +218,5 @@ namespace LogShippingService
                 return false;
             }
         }
-
     }
 }

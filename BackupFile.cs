@@ -4,6 +4,7 @@
     {
         private List<BackupFileListRow>? _backupFiles;
         private List<BackupHeader>? _headers;
+        private Config Config => AppConfig.Config;
 
         public BackupFile(string filePath, BackupHeader.DeviceTypes deviceType, DateTime lastModUtc)
         {
@@ -24,7 +25,7 @@
         {
             get
             {
-                _headers ??= BackupHeader.GetHeaders(FilePath, Config.ConnectionString, DeviceType);
+                _headers ??= BackupHeader.GetHeaders(FilePath, Config.Destination, DeviceType);
                 return _headers;
             }
         }
@@ -33,7 +34,7 @@
         {
             get
             {
-                _backupFiles ??= BackupFileListRow.GetFileList(FilePath, Config.ConnectionString, DeviceType);
+                _backupFiles ??= BackupFileListRow.GetFileList(FilePath, Config.Destination, DeviceType);
                 return _backupFiles;
             }
         }

@@ -1,281 +1,636 @@
 ﻿using Cronos;
+using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Serilog;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
+using System.Runtime.CompilerServices;
+using CommandLine;
+using Microsoft.Extensions.Azure;
+using static System.Collections.Specialized.BitVector32;
 
 namespace LogShippingService
 {
-    internal static class Config
+    [JsonObject()]
+    public class Config
     {
+        #region "Constants"
+
+        private const int DelayBetweenIterationsMsDefault = 60000;
+        private const int MaxThreadsDefault = 5;
+        private const int MaxProcessingTimeMinsDefault = 60;
+        private const int MaxBackupAgeForInitializationDefault = 14;
+        private const int PollForNewDatabasesFrequencyDefault = 10;
+        private const int KillUserConnectionsWithRollbackAfterDefault = 60;
+        private bool _encryptionRequired = false;
+
+        [JsonIgnore]
+        public bool EncryptionRequired => _encryptionRequired;
+
+        /// <summary>Database token to be used</summary>
+        [JsonIgnore]
+        public const string DatabaseToken = "{DatabaseName}";
+
+        /// <summary>Config file name</summary>
+        public const string ConfigFile = "appsettings.json";
+
+        #endregion "Constants"
+
         #region Azure
+
         /// <summary>Container URL to be used when restoring directly from Azure blob containers</summary>
-        public static readonly string? ContainerURL;
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? ContainerUrl { get; set; }
+
+        private string? _sasToken;
 
         /// <summary>SAS Token be used to allow access to Azure blob container when restoring directly from Azure blob.</summary>
-        public static readonly string? SASToken;
+        [JsonIgnore]
+        public string? SASToken
+        {
+            get => _sasToken;
+            set => SetSASToken(value);
+        }
 
-        #endregion
+        private void SetSASToken(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                _sasToken = null;
+            }
+            else if (EncryptionHelper.IsEncrypted(value))
+            {
+                _sasToken = EncryptionHelper.DecryptWithMachineKey(value);
+            }
+            else
+            {
+                _sasToken = value.StartsWith("?") ? value : "?" + value;
+                _encryptionRequired = true;
+            }
+        }
+
+        [JsonProperty("SASToken", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? SASTokenEncrypted
+        {
+            get => !string.IsNullOrEmpty(SASToken) ? EncryptionHelper.EncryptWithMachineKey(SASToken) : null;
+            set => SetSASToken(value);
+        }
+
+        #endregion Azure
 
         #region BasicConfig
 
-        public static readonly string ConnectionString;
-        public static readonly string? LogFilePathTemplate;
+        private string _logFilePath = string.Empty;
 
-        #endregion
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string Destination { get; set; } = string.Empty;
+
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public string? LogFilePath
+        {
+            get => _logFilePath;
+            set
+            {
+                if (!string.IsNullOrEmpty(value) && !value.Contains(DatabaseToken))
+                {
+                    throw new ArgumentException($"Missing {DatabaseToken} token from LogFilePath");
+                }
+                _logFilePath = value ?? string.Empty;
+            }
+        }
+
+        #endregion BasicConfig
 
         #region Schedule
 
         /// <summary>Delay between processing log restores in milliseconds</summary>
-        public static readonly int IterationDelayMs;
+        public int DelayBetweenIterationsMs { get; set; } = DelayBetweenIterationsMsDefault;
 
-        /// <summary>Cron schedule for log restores.  Overrides IterationDelayMs if specified </summary>
-        public static string? LogRestoreScheduleCron; 
+        /// <summary>Cron schedule for log restores.  Overrides DelayBetweenIterationsMs if specified </summary>
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public string? LogRestoreScheduleCron
+        {
+            get => LogRestoreCron?.ToString();
+            set => LogRestoreCron = value != null ? CronExpression.Parse(value) : null;
+        }
 
         /// <summary>Return if cron schedule should be used for log restores</summary>
-        public static bool UseLogRestoreScheduleCron => !string.IsNullOrEmpty(LogRestoreScheduleCron) && LogRestoreCron!=null;
+        [JsonIgnore]
+        public bool UseLogRestoreScheduleCron => LogRestoreCron != null;
 
         /// <summary>Cron expression for generating next log restore time</summary>
-        public static CronExpression? LogRestoreCron;
+        [JsonIgnore]
+        public CronExpression? LogRestoreCron;
 
         /// <summary>Timezone offset to handle timezone differences if needed</summary>
-        public static readonly int OffSetMins;
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public int OffsetMins { get; set; }
 
         /// <summary>Maximum amount of time to spend processing log restores for a single database in minutes.</summary>
-        public static readonly int MaxProcessingTimeMins;
+        public int MaxProcessingTimeMins { get; set; } = MaxProcessingTimeMinsDefault;
+
+        private HashSet<int> _hours = new();
 
         /// <summary> Hours where log restores will run.  Default is all hours. 0..23 </summary>
-        public static List<int> Hours;
-
-        /// <summary>How often to poll for new databases in minutes</summary>
-        public static int PollForNewDatabasesFrequency;
-
-        /// <summary>Cron schedule for initializing new databases.  Overrides PollForNewDatabasesFrequency if specified</summary>
-        public static string? PollForNewDatabasesCron;
-
-        /// <summary>Cron expression for generating next database initialization time</summary>
-        public static CronExpression? PollForNewDatabasesCronExpression;
-
-        /// <summary>Return if cron schedule should be used for database initialization</summary>
-        public static bool UsePollForNewDatabasesCron => !string.IsNullOrEmpty(PollForNewDatabasesCron) && PollForNewDatabasesCronExpression!=null;
-
-        #endregion
-
-        #region Standby
-
-        /// <summary>Path to standby file which should contain {DatabaseName} token to be replaced with database name.  If null, standby will not be used.</summary>
-        public static readonly string? StandbyFileName;
-
-        /// <summary>Kill user connections to the databases to allow restores to proceed</summary>
-        public static bool KillUserConnections;
-
-        /// <summary>Killed user connections will be rolled back after the specified number of seconds.  Defaults to 60 seconds.</summary>
-        public static int KillUserConnectionsWithRollBackAfter;
-
-        #endregion
-
-        #region Initialization
-
-        /// <summary>Full backup path for initialization of new databases.  If null, initialization from disk will not be performed. e.g. \BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\FULL</summary>
-        public static string? FullBackupPathTemplate;
-        
-        /// <summary>Diff backup path for initialization of new databases.  If null, initialization will not use diff backups. e.g. \BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\DIFF</summary>
-        public static string? DiffBackupPathTemplate;
-        
-        /// <summary>List of databases to include in log shipping.  If empty, all databases will be included.</summary>
-        public static List<string> IncludedDatabases;
-        
-        /// <summary>List of databases to exclude from log shipping.  If empty, all databases will be included.</summary>
-        public static List<string> ExcludedDatabases;
-        
-        /// <summary>Source connection string for initialization of new databases from msdb.  Overrides FullBackupPathTemplate and DiffBackupPathTemplate if specified.</summary>
-        public static string? SourceConnectionString;
-        
-        /// <summary>Option to initialize databases using simple recovery model.  These databases can't be used for log shipping but we might want to restore in case of disaster recovery.</summary>
-        public static bool InitializeSimple;
-        
-        /// <summary>Max age of backups to use for initialization in days.  Defaults to 14 days. Prevents old backups been used to initialize. </summary>
-        public static int MaxBackupAgeForInitialization;
-        
-        /// <summary>Path to move data files to after initialization.  If null, files will be restored to their original location</summary>
-        public static string? MoveDataFolder;
-        
-        /// <summary>Path to move log files to after initialization.  If null, files will be restored to their original location</summary>
-        public static string? MoveLogFolder;
-        
-        /// <summary>Path to move filestream folders to after initialization.  If null, folders will be restored to their original location</summary>
-        public static string? MoveFileStreamFolder;
-        
-        /// <summary>ReadOnly partial backup path for initialization of new databases. </summary>
-        public static string? ReadOnlyPartialBackupPathTemplate;
-        
-        /// <summary>Option to recover partial backups without readonly</summary>
-        public static bool RecoverPartialBackupWithoutReadOnly;
-        
-        /// <summary>Find part of find/replace for backup paths from msdb history.  e.g. Convert local paths to UNC paths</summary>
-        public static string? MSDBPathFind;
-        
-        /// <summary>Replace part of find/replace for backup paths from msdb history.  e.g. Convert local paths to UNC paths</summary>
-        public static string? MSDBPathReplace;
-
-        #endregion
-
-        #region OtherOptions
-
-        /// <summary>Database token to be used</summary>
-        public static readonly string DatabaseToken = "{DatabaseName}";
-        /// <summary>Config file name</summary>
-        private const string ConfigFile = "appsettings.json";
-        /// <summary>Option to check headers.  Defaults to true</summary>
-        public static bool CheckHeaders;
-        /// <summary>Max number of threads to use for log restores and database initialization (each can use up to MaxThreads)</summary>
-        public static readonly int MaxThreads;
-
-        public static int RestoreDelayMins;
-
-        public static DateTime StopAt;
-
-        #endregion
-
-        /// <summary>
-        /// Read the json configuration file and set values
-        /// </summary>
-        static Config()
+        public HashSet<int> Hours
         {
-            try
+            get => _hours;
+            set
             {
-                var configuration = new ConfigurationBuilder()
-                    .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
-                    .AddJsonFile(ConfigFile)
-                    .Build();
-
-                // Read values from the configuration
-                ContainerURL = configuration["Config:ContainerUrl"];
-                SASToken = configuration["Config:SASToken"];
-                StandbyFileName = configuration["Config:StandbyFileName"];
-                KillUserConnections = bool.Parse(configuration["Config:KillUserConnections"] ?? true.ToString());
-                KillUserConnectionsWithRollBackAfter = int.Parse(configuration["Config:KillUserConnectionsWithRollbackAfter"] ?? 60.ToString());
-                IncludedDatabases = configuration.GetSection("Config:IncludedDatabases").Get<List<string>>() ?? new List<string>();
-                ExcludedDatabases = configuration.GetSection("Config:ExcludedDatabases").Get<List<string>>() ?? new List<string>();
-                SourceConnectionString = configuration["Config:SourceConnectionString"];
-                PollForNewDatabasesFrequency = int.Parse(configuration["Config:PollForNewDatabasesFrequency"] ?? 10.ToString());
-                CheckHeaders = bool.Parse(configuration["Config:CheckHeaders"] ?? true.ToString());
-                Log.Information("Included {IncludedDBs}", IncludedDatabases);
-                Log.Information("Excluded {ExcludedDBs}", ExcludedDatabases);
-                Hours = configuration.GetSection("Config:Hours").Get<List<int>>() ?? new List<int>
+                if (value is { Count: > 24 })
                 {
-                    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
-                    14, 15, 16, 17, 18, 19, 20, 21, 22, 23
-                };
-                if (Hours.Count != 24)
-                {
-                    Log.Information("Log Restores will run in these hours {hours}", Hours);
+                    throw new ArgumentException("Too many arguments specified for Hours");
                 }
-                if (!string.IsNullOrEmpty(SASToken) && !EncryptionHelper.IsEncrypted(SASToken))
+                else if (value is { Count: 1 } && value.First() == -1)
                 {
-                    if (!SASToken.StartsWith('?'))
-                    {
-                        Log.Information("Adding ? to SAS Token");
-                        SASToken = "?" + SASToken;
-                    }
-                    Log.Information("Encrypting SAS Token");
-                    Config.Update("Config", "SASToken", EncryptionHelper.EncryptWithMachineKey(SASToken));
+                    _hours = DefaultHours;
+                }
+                else if (value != null && value.Any(h => h is < 0 or > 23))
+                {
+                    throw new ArgumentException("Hours should have the values 0-23");
                 }
                 else
                 {
-                    SASToken = EncryptionHelper.DecryptWithMachineKey(SASToken);
+                    _hours = value ?? DefaultHours;
                 }
-
-                if (!string.IsNullOrEmpty(ConnectionString) && string.IsNullOrEmpty(SASToken))
-                {
-                    var message = "SASToken is required with ContainerUrl";
-                    Log.Error(message);
-                    throw new ArgumentException(message);
-                }
-                if (!string.IsNullOrEmpty(StandbyFileName) && (!Config.StandbyFileName.Contains(DatabaseToken)))
-                {
-                    Log.Error("Missing {DatabaseToken} from StandbyFileName", DatabaseToken);
-                    throw new ArgumentException($"Missing {DatabaseToken} from StandbyFileName");
-                }
-
-                ConnectionString = configuration["Config:Destination"] ?? throw new InvalidOperationException();
-                MaxThreads = int.Parse(configuration["Config:MaxThreads"] ?? 5.ToString());
-                LogFilePathTemplate = configuration["Config:LogFilePath"];
-                FullBackupPathTemplate = configuration["Config:FullFilePath"];
-                DiffBackupPathTemplate = configuration["Config:DiffFilePath"];
-                ReadOnlyPartialBackupPathTemplate = configuration["Config:ReadOnlyFilePath"];
-                if (LogFilePathTemplate != null && !LogFilePathTemplate.Contains(DatabaseToken))
-                {
-                    throw new ValidationException("LogFilePathTemplate should contain '{DatabaseToken}'");
-                }
-                IterationDelayMs = int.Parse(configuration["Config:DelayBetweenIterationsMs"] ??
-                                               60000.ToString());
-                OffSetMins = int.Parse(configuration["Config:OffsetMins"] ?? 0.ToString());
-                MaxProcessingTimeMins = int.Parse(configuration["Config:MaxProcessingTimeMins"] ??
-                                                    60.ToString());
-                InitializeSimple = bool.Parse(configuration["Config:InitializeSimple"] ?? false.ToString());
-                MaxBackupAgeForInitialization = int.Parse(configuration["Config:MaxBackupAgeForInitialization"] ?? 14.ToString());
-                MoveDataFolder = configuration["Config:MoveDataFolder"];
-                MoveLogFolder = configuration["Config:MoveLogFolder"];
-                MoveFileStreamFolder = configuration["Config:MoveFileStreamFolder"];
-                RecoverPartialBackupWithoutReadOnly = bool.Parse(configuration["Config:RecoverPartialBackupWithoutReadOnly"] ?? false.ToString());
-                MSDBPathFind = configuration["Config:MSDBPathFind"];
-                MSDBPathReplace = configuration["Config:MSDBPathReplace"];
-                LogRestoreScheduleCron = configuration["Config:LogRestoreScheduleCron"];
-                RestoreDelayMins = int.Parse(configuration["Config:RestoreDelayMins"] ?? 0.ToString());
-                StopAt = configuration["Config:StopAt"] ==null? DateTime.MaxValue : DateTime.Parse(configuration["Config:StopAt"]!);
-                if (!string.IsNullOrEmpty(LogRestoreScheduleCron))
-                {
-                    try
-                    {
-                        LogRestoreCron = CronExpression.Parse(LogRestoreScheduleCron);
-                        Log.Information("Using log restore Cron schedule: {cron}", LogRestoreScheduleCron);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error(ex, "Error parsing LogRestoreScheduleCron");
-                        throw;
-                    }
-                }
-                PollForNewDatabasesCron = configuration["Config:PollForNewDatabasesCron"];
-                if (!string.IsNullOrEmpty(PollForNewDatabasesCron))
-                {
-                    try
-                    {
-                        PollForNewDatabasesCronExpression= CronExpression.Parse(PollForNewDatabasesCron);
-                        Log.Information("Initializing new databases on Cron schedule: {cron}", PollForNewDatabasesCron);
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Error(ex, "Error parsing PollForNewDatabasesCron");
-                        throw;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "Error reading config");
-                throw;
             }
         }
 
-        /// <summary>
-        /// Update the value of a key in the config file.  e.g. Replace SASToken with encrypted value
-        /// </summary>
-        /// <param name="section">Section.  e.g. Config</param>
-        /// <param name="key">Key.  e.g. SASToken</param>
-        /// <param name="value">New value for key</param>
-        /// <exception cref="InvalidOperationException"></exception>
-        private static void Update(string section, string key, string value)
+        public static readonly HashSet<int> DefaultHours = new()
         {
-            var json = File.ReadAllText(ConfigFile);
-            dynamic jsonObj = JsonConvert.DeserializeObject(json) ?? throw new InvalidOperationException();
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,
+            14, 15, 16, 17, 18, 19, 20, 21, 22, 23
+        };
 
-            jsonObj[section][key] = value;
+        public int PollForNewDatabasesFrequency { get; set; } = PollForNewDatabasesFrequencyDefault;
 
-            string output = JsonConvert.SerializeObject(jsonObj, Formatting.Indented);
-            File.WriteAllText(ConfigFile, output);
+        /// <summary>Cron schedule for initializing new databases.  Overrides PollForNewDatabasesFrequency if specified</summary>
+        [JsonProperty(NullValueHandling = NullValueHandling.Ignore)]
+        public string? PollForNewDatabasesCron
+        {
+            get => PollForNewDatabasesCronExpression?.ToString();
+            set => PollForNewDatabasesCronExpression = value != null ? CronExpression.Parse(value) : null;
+        }
+
+        /// <summary>Cron expression for generating next database initialization time</summary>
+        [JsonIgnore]
+        public CronExpression? PollForNewDatabasesCronExpression;
+
+        /// <summary>Return if cron schedule should be used for database initialization</summary>
+        [JsonIgnore]
+        public bool UsePollForNewDatabasesCron => PollForNewDatabasesCronExpression != null;
+
+        #endregion Schedule
+
+        #region Standby
+
+        private string? _standbyFileName;
+
+        /// <summary>Path to standby file which should contain {DatabaseName} token to be replaced with database name.  If null, standby will not be used.</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? StandbyFileName
+        {
+            get => _standbyFileName;
+            set
+            {
+                if (!string.IsNullOrEmpty(value) && !value.Contains(DatabaseToken))
+                {
+                    throw new ArgumentException($"Missing {DatabaseToken} token from StandbyFileName");
+                }
+                _standbyFileName = value;
+            }
+        }
+
+        /// <summary>Kill user connections to the databases to allow restores to proceed</summary>
+        public bool KillUserConnections { get; set; } = true;
+
+        /// <summary>Killed user connections will be rolled back after the specified number of seconds.  Defaults to 60 seconds.</summary>
+        public int KillUserConnectionsWithRollbackAfter { get; set; } = KillUserConnectionsWithRollbackAfterDefault;
+
+        #endregion Standby
+
+        #region Initialization
+
+        private string? _fullFilePath;
+        private string? _diffFilePath;
+        private string? _readOnlyFilePath;
+
+        /// <summary>Full backup path for initialization of new databases.  If null, initialization from disk will not be performed. e.g. \BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\FULL</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? FullFilePath
+        {
+            get => _fullFilePath;
+            set
+            {
+                if (!string.IsNullOrEmpty(value) && !value.Contains(DatabaseToken))
+                {
+                    throw new ArgumentException($"Missing {DatabaseToken} token from FullFilePath");
+                }
+                _fullFilePath = value;
+            }
+        }
+
+        /// <summary>Diff backup path for initialization of new databases.  If null, initialization will not use diff backups. e.g. \BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\DIFF</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? DiffFilePath
+        {
+            get => _diffFilePath;
+            set
+            {
+                if (!string.IsNullOrEmpty(value) && !value.Contains(DatabaseToken))
+                {
+                    throw new ArgumentException($"Missing {DatabaseToken} token from DiffFilePath");
+                }
+                _diffFilePath = value;
+            }
+        }
+
+        /// <summary>List of databases to include in log shipping.  If empty, all databases will be included.</summary>
+        public HashSet<string> IncludedDatabases { get; set; } = new();
+
+        /// <summary>List of databases to exclude from log shipping.  If empty, all databases will be included.</summary>
+        public HashSet<string> ExcludedDatabases { get; set; } = new();
+
+        /// <summary>Source connection string for initialization of new databases from msdb.  Overrides FullFilePath and DiffFilePath if specified.</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? SourceConnectionString { get; set; }
+
+        /// <summary>Option to initialize databases using simple recovery model.  These databases can't be used for log shipping but we might want to restore in case of disaster recovery.</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool InitializeSimple { get; set; }
+
+        /// <summary>Max age of backups to use for initialization in days.  Defaults to 14 days. Prevents old backups been used to initialize. </summary>
+        public int MaxBackupAgeForInitialization { get; set; } = MaxBackupAgeForInitializationDefault;
+
+        /// <summary>Path to move data files to after initialization.  If null, files will be restored to their original location</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? MoveDataFolder { get; set; }
+
+        /// <summary>Path to move log files to after initialization.  If null, files will be restored to their original location</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? MoveLogFolder { get; set; }
+
+        /// <summary>Path to move filestream folders to after initialization.  If null, folders will be restored to their original location</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? MoveFileStreamFolder { get; set; }
+
+        /// <summary>ReadOnly partial backup path for initialization of new databases. </summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? ReadOnlyFilePath
+        {
+            get => _readOnlyFilePath;
+            set
+            {
+                if (!string.IsNullOrEmpty(value) && !value.Contains(DatabaseToken))
+                {
+                    throw new ArgumentException($"Missing {DatabaseToken} from ReadOnlyFilePath");
+                }
+                _readOnlyFilePath = value;
+            }
+        }
+
+        /// <summary>Option to recover partial backups without readonly</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool RecoverPartialBackupWithoutReadOnly { get; set; }
+
+        /// <summary>Find part of find/replace for backup paths from msdb history.  e.g. Convert local paths to UNC paths</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? MSDBPathFind { get; set; }
+
+        /// <summary>Replace part of find/replace for backup paths from msdb history.  e.g. Convert local paths to UNC paths</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? MSDBPathReplace { get; set; }
+
+        #endregion Initialization
+
+        #region OtherOptions
+
+        /// <summary>Option to check headers.  Defaults to true</summary>
+        public bool CheckHeaders { get; set; } = true;
+
+        /// <summary>Max number of threads to use for log restores and database initialization (each can use up to MaxThreads)</summary>
+        public int MaxThreads { get; set; } = MaxThreadsDefault;
+
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public int RestoreDelayMins { get; set; }
+
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public DateTime StopAt { get; set; }
+
+        #endregion OtherOptions
+
+        #region Serialization
+
+        public bool ShouldSerializeDelayBetweenIterationsMs()
+        {
+            return DelayBetweenIterationsMs != DelayBetweenIterationsMsDefault;
+        }
+
+        public bool ShouldSerializeCheckHeaders()
+        {
+            return CheckHeaders == false;
+        }
+
+        public bool ShouldSerializeIncludedDatabases()
+        {
+            return IncludedDatabases.Count != 0;
+        }
+
+        public bool ShouldSerializeExcludedDatabases()
+        {
+            return ExcludedDatabases.Count != 0;
+        }
+
+        public bool ShouldSerializeKillUserConnections()
+        {
+            return KillUserConnections == false;
+        }
+
+        public bool ShouldSerializeHours()
+        {
+            return Hours != DefaultHours;
+        }
+
+        public bool ShouldSerializeMaxThreads()
+        {
+            return MaxThreads != MaxThreadsDefault;
+        }
+
+        public bool ShouldSerializeMaxProcessingTimeMins()
+        {
+            return MaxProcessingTimeMins != MaxProcessingTimeMinsDefault;
+        }
+
+        public bool ShouldSerializeMaxBackupAgeForInitialization()
+        {
+            return MaxBackupAgeForInitialization != MaxBackupAgeForInitializationDefault;
+        }
+
+        public bool ShouldSerializePollForNewDatabasesFrequency()
+        {
+            return PollForNewDatabasesFrequency != PollForNewDatabasesFrequencyDefault;
+        }
+
+        public bool ShouldSerializeKillUserConnectionsWithRollbackAfter()
+        {
+            return KillUserConnectionsWithRollbackAfter != KillUserConnectionsWithRollbackAfterDefault;
+        }
+
+        #endregion Serialization
+
+        public void ValidateConfig()
+        {
+            if (!string.IsNullOrEmpty(ContainerUrl) && string.IsNullOrEmpty(SASToken))
+            {
+                var message = "SASToken is required with ContainerUrl";
+                Log.Error(message);
+                throw new ArgumentException(message);
+            }
+            if (string.IsNullOrEmpty(Destination))
+            {
+                throw new ValidationException("Destination connection string should be configured");
+            }
+
+            if (string.IsNullOrEmpty(LogFilePath))
+            {
+                throw new ValidationException("LogFilePath should be configured");
+            }
+            if (AppConfig.Config.EncryptionRequired)
+            {
+                Log.Information("Saving config with encryption.");
+                AppConfig.Config.Save();
+            }
+            if (_hours.Count == 0)
+            {
+                _hours = DefaultHours;
+            }
+        }
+
+        #region CommandLine
+
+        public bool ApplyCommandLineOptions(string[] args)
+        {
+            if (args.Length == 0) return false;
+
+            var cfg = AppConfig.Config;
+
+            var errorCount = 0;
+            var result = Parser.Default.ParseArguments<CommandLineOptions>(args)
+                .WithParsed<CommandLineOptions>(opts =>
+                    {
+                        try
+                        {
+                            if (opts.Destination != null)
+                            {
+                                Destination = opts.Destination;
+                            }
+
+                            if (opts.LogFilePath != null)
+                            {
+                                LogFilePath = opts.LogFilePath;
+                            }
+
+                            if (opts.SASToken != null)
+                            {
+                                SASToken = opts.SASToken;
+                            }
+
+                            if (opts.SourceConnectionString != null)
+                            {
+                                SourceConnectionString = opts.SourceConnectionString;
+                            }
+
+                            if (opts.MSDBPathFind != null)
+                            {
+                                MSDBPathFind = opts.MSDBPathFind;
+                            }
+
+                            if (opts.MSDBPathReplace != null)
+                            {
+                                MSDBPathReplace = opts.MSDBPathReplace;
+                            }
+
+                            if (opts.FullFilePath != null)
+                            {
+                                FullFilePath = opts.FullFilePath;
+                            }
+
+                            if (opts.DiffFilePath != null)
+                            {
+                                DiffFilePath = opts.DiffFilePath;
+                            }
+
+                            if (opts.ReadOnlyFilePath != null)
+                            {
+                                ReadOnlyFilePath = opts.ReadOnlyFilePath;
+                            }
+
+                            if (opts.RecoverPartialBackupWithoutReadOnly != null)
+                            {
+                                RecoverPartialBackupWithoutReadOnly = (bool)opts.RecoverPartialBackupWithoutReadOnly;
+                            }
+
+                            if (opts.PollForNewDatabasesFrequency != null)
+                            {
+                                PollForNewDatabasesFrequency = (int)opts.PollForNewDatabasesFrequency;
+                            }
+
+                            if (opts.MaxBackupAgeForInitialization != null)
+                            {
+                                MaxBackupAgeForInitialization = (int)opts.MaxBackupAgeForInitialization;
+                            }
+
+                            if (opts.MoveDataFolder != null)
+                            {
+                                MoveDataFolder = opts.MoveDataFolder;
+                            }
+
+                            if (opts.MoveLogFolder != null)
+                            {
+                                MoveLogFolder = opts.MoveLogFolder;
+                            }
+
+                            if (opts.MoveFileStreamFolder != null)
+                            {
+                                MoveFileStreamFolder = opts.MoveFileStreamFolder;
+                            }
+
+                            if (opts.InitializeSimple != null)
+                            {
+                                InitializeSimple = (bool)opts.InitializeSimple;
+                            }
+
+                            if (opts.IncludedDatabases != null && args.Contains("--IncludedDatabases"))
+                            {
+                                IncludedDatabases = opts.IncludedDatabases.Where(dbs => !string.IsNullOrEmpty(dbs))
+                                    .ToHashSet();
+                            }
+
+                            if (opts.ExcludedDatabases != null && args.Contains("--ExcludedDatabases"))
+                            {
+                                ExcludedDatabases = opts.ExcludedDatabases.Where(dbs => !string.IsNullOrEmpty(dbs))
+                                    .ToHashSet();
+                            }
+
+                            if (opts.OffsetMins != null)
+                            {
+                                OffsetMins = (int)opts.OffsetMins;
+                            }
+
+                            if (opts.CheckHeaders != null)
+                            {
+                                CheckHeaders = (bool)opts.CheckHeaders;
+                            }
+
+                            if (opts.RestoreDelayMins != null)
+                            {
+                                RestoreDelayMins = (int)opts.RestoreDelayMins;
+                            }
+
+                            if (opts.StopAt != null)
+                            {
+                                StopAt = (DateTime)opts.StopAt;
+                            }
+
+                            if (opts.LogRestoreScheduleCron != null)
+                            {
+                                try
+                                {
+                                    LogRestoreScheduleCron = opts.LogRestoreScheduleCron;
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log.Error(ex, "Error parsing LogRestoreScheduleCron");
+                                    errorCount++;
+                                }
+
+                                DelayBetweenIterationsMs = DelayBetweenIterationsMsDefault;
+                            }
+
+                            if (opts.DelayBetweenIterationsMs != null)
+                            {
+                                DelayBetweenIterationsMs = (int)opts.DelayBetweenIterationsMs;
+                                LogRestoreScheduleCron = null;
+                            }
+
+                            if (opts.MaxThreads != null)
+                            {
+                                MaxThreads = (int)opts.MaxThreads;
+                            }
+
+                            if (opts.ContainerUrl != null)
+                            {
+                                ContainerUrl = opts.ContainerUrl;
+                            }
+
+                            if (opts.PollForNewDatabasesCron != null)
+                            {
+                                try
+                                {
+                                    PollForNewDatabasesCron = opts.PollForNewDatabasesCron;
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log.Error(ex, "Error parsing PollForNewDatabasesCron");
+                                    errorCount++;
+                                }
+                            }
+
+                            if (opts.IncludeDatabase != null)
+                            {
+                                IncludedDatabases.Add(opts.IncludeDatabase);
+                            }
+
+                            if (opts.ExcludeDatabase != null)
+                            {
+                                ExcludedDatabases.Add(opts.ExcludeDatabase);
+                            }
+
+                            if (opts.Hours != null && opts.Hours.Any())
+                            {
+                                Hours = opts.Hours.ToHashSet();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error(ex, "Error parsing command line options");
+                            errorCount++;
+                        }
+                    }
+                );
+
+            if (errorCount == 0 && result.Tag == ParserResultType.Parsed)
+            {
+                Save();
+                Log.Information("Configuration updated.  Restart the service.");
+                Console.WriteLine(File.ReadAllText(ConfigFile));
+            }
+
+            return true;
+        }
+
+        #endregion CommandLine
+
+        public void Save()
+        {
+            // Read the existing appsettings.json content
+            var configFileContent = File.ReadAllText(ConfigFile);
+            var configJson = JObject.Parse(configFileContent);
+
+            // Serialize the current instance of Config to JSON
+            var serializedConfig = JsonConvert.SerializeObject(this, Formatting.Indented);
+
+            // Parse the serialized config as a JObject
+            var updatedConfigSection = JObject.Parse(serializedConfig);
+
+            // Directly set the "Config" section to the new configuration
+            // This replaces the entire "Config" section with your updated configuration
+            configJson["Config"] = updatedConfigSection;
+
+            // Write the updated JSON back to the appsettings.json file
+            File.WriteAllText(ConfigFile, configJson.ToString(Formatting.Indented));
         }
     }
 }
