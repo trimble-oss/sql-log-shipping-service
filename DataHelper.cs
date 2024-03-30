@@ -8,6 +8,8 @@ namespace LogShippingService
 {
     public class DataHelper
     {
+        private static Config Config => AppConfig.Config;
+
         public static DataTable GetDataTable(string sql, string connectionString)
         {
             using var cn = new SqlConnection(connectionString);
@@ -106,7 +108,7 @@ namespace LogShippingService
 
         public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type)
         {
-            return GetFileMoves(files, type, Config.ConnectionString, Config.MoveDataFolder, Config.MoveLogFolder,
+            return GetFileMoves(files, type, Config.Destination, Config.MoveDataFolder, Config.MoveLogFolder,
                 Config.MoveFileStreamFolder);
         }
 

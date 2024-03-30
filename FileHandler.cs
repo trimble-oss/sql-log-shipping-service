@@ -13,17 +13,18 @@ namespace LogShippingService
 {
     internal class FileHandler
     {
+        private static Config Config => AppConfig.Config;
 
         public static BackupHeader.DeviceTypes DeviceType =>
-            !string.IsNullOrEmpty(Config.ContainerURL) && !string.IsNullOrEmpty(Config.SASToken)
+            !string.IsNullOrEmpty(Config.ContainerUrl) && !string.IsNullOrEmpty(Config.SASToken)
                 ? BackupHeader.DeviceTypes.Url
                 : BackupHeader.DeviceTypes.Disk;
 
         public static IEnumerable<BackupFile> GetFiles(string path, string pattern, DateTime MaxAge)
         {
-            if (DeviceType== BackupHeader.DeviceTypes.Url)
+            if (DeviceType == BackupHeader.DeviceTypes.Url)
             {
-                return GetFilesFromUrl(path, pattern, MaxAge, new Uri(Config.ContainerURL + Config.SASToken));
+                return GetFilesFromUrl(path, pattern, MaxAge, new Uri(Config.ContainerUrl + Config.SASToken));
             }
             else
             {
@@ -31,24 +32,24 @@ namespace LogShippingService
             }
         }
 
-        public static  IEnumerable<string> GetDatabases()
+        public static IEnumerable<string> GetDatabases()
         {
-            if (string.IsNullOrEmpty(Config.FullBackupPathTemplate)) return new List<string>();
+            if (string.IsNullOrEmpty(Config.FullFilePath)) return new List<string>();
             if (Config.IncludedDatabases.Count > 0)
             {
-                Log.Information("Polling for new databases.  Using IncludedDatabases list. {Included}",Config.IncludedDatabases);
+                Log.Information("Polling for new databases.  Using IncludedDatabases list. {Included}", Config.IncludedDatabases);
                 return Config.IncludedDatabases;
             }
-            else if(DeviceType  == BackupHeader.DeviceTypes.Disk) 
+            else if (DeviceType == BackupHeader.DeviceTypes.Disk)
             {
-                var dbRoot = Config.FullBackupPathTemplate[
-                    ..Config.FullBackupPathTemplate.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
-                Log.Information("Polling for new databases from disk.  Folders in path: {path}",dbRoot);
+                var dbRoot = Config.FullFilePath[
+                    ..Config.FullFilePath.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
+                Log.Information("Polling for new databases from disk.  Folders in path: {path}", dbRoot);
                 return System.IO.Directory.EnumerateDirectories(dbRoot).Select(Path.GetFileName)!;
             }
             else
             {
-                var dbRoot = Config.FullBackupPathTemplate[..Config.FullBackupPathTemplate.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
+                var dbRoot = Config.FullFilePath[..Config.FullFilePath.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
                 Log.Information("Polling for new databases from Azure Blob.  Folders in path: {path}", dbRoot);
                 return GetFoldersForAzBlob(dbRoot);
             }
@@ -56,7 +57,7 @@ namespace LogShippingService
 
         private static IEnumerable<string> GetFoldersForAzBlob(string prefix)
         {
-            var containerUri = new Uri(Config.ContainerURL + Config.SASToken);
+            var containerUri = new Uri(Config.ContainerUrl + Config.SASToken);
             var containerClient = new BlobContainerClient(containerUri);
 
             var results = containerClient.GetBlobsByHierarchy(prefix: prefix, delimiter: "/").AsPages();
@@ -64,9 +65,7 @@ namespace LogShippingService
             return (from blobPage in results from item in blobPage.Values select item.Prefix.Split(new char[] { '/' }, StringSplitOptions.RemoveEmptyEntries).Last());
         }
 
-
-
-        public static IEnumerable<BackupFile> GetFilesFromDisk(string path,string pattern, DateTime MaxAge)
+        public static IEnumerable<BackupFile> GetFilesFromDisk(string path, string pattern, DateTime MaxAge)
         {
             if (!Directory.Exists(path)) throw new Exception($"GetFilesFromDisk Folder '{path}' does not exist.");
             List<string> fileList = new();
@@ -75,24 +74,24 @@ namespace LogShippingService
             return directory.GetFiles(pattern)
                 .Where(f => f.LastWriteTimeUtc >= MaxAge)
                 .OrderByDescending(f => f.LastWriteTimeUtc)
-                .Select(f=> new BackupFile(f.FullName, BackupHeader.DeviceTypes.Disk,f.LastWriteTimeUtc));
+                .Select(f => new BackupFile(f.FullName, BackupHeader.DeviceTypes.Disk, f.LastWriteTimeUtc));
         }
 
-        public static IEnumerable<BackupFile> GetFilesFromUrl(string path, string pattern, DateTime MaxAge,Uri containerUri)
+        public static IEnumerable<BackupFile> GetFilesFromUrl(string path, string pattern, DateTime MaxAge, Uri containerUri)
         {
             var files = new List<string>();
             var containerClient = new BlobContainerClient(containerUri);
 
-           return containerClient
-                .GetBlobs(BlobTraits.Metadata, BlobStates.None, path)
-                .Where(blobItem => IsFileNameMatchingPattern(blobItem.Name, pattern) &&
-                                   blobItem.Properties.LastModified >= MaxAge)
-                .OrderByDescending(blobItem => blobItem.Properties.LastModified)
-                .Select(blobItem =>
-                    new BackupFile(Config.ContainerURL + "/" + blobItem.Name, BackupHeader.DeviceTypes.Url, blobItem.Properties.LastModified!.Value.UtcDateTime));
+            return containerClient
+                 .GetBlobs(BlobTraits.Metadata, BlobStates.None, path)
+                 .Where(blobItem => IsFileNameMatchingPattern(blobItem.Name, pattern) &&
+                                    blobItem.Properties.LastModified >= MaxAge)
+                 .OrderByDescending(blobItem => blobItem.Properties.LastModified)
+                 .Select(blobItem =>
+                     new BackupFile(Config.ContainerUrl + "/" + blobItem.Name, BackupHeader.DeviceTypes.Url, blobItem.Properties.LastModified!.Value.UtcDateTime));
         }
 
-       public static bool IsFileNameMatchingPattern(string fileName, string searchPattern)
+        public static bool IsFileNameMatchingPattern(string fileName, string searchPattern)
         {
             var pattern = "^" + Regex.Escape(searchPattern)
                 .Replace(@"\*", ".*")
@@ -100,6 +99,5 @@ namespace LogShippingService
 
             return Regex.IsMatch(fileName, pattern, RegexOptions.IgnoreCase);
         }
-
     }
 }
