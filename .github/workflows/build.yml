@@ -19,7 +19,7 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Build solution
-        run: dotnet build LogShippingService.csproj -p:Configuration=Release -o Build
+        run: dotnet build sql-log-shipping-service\LogShippingService.csproj -p:Configuration=Release -o Build
 
       - name: Install SQL
         uses: potatoqualitee/mssqlsuite@v1.7
@@ -81,3 +81,6 @@ jobs:
           Install-Module Pester -Force
           Import-Module Pester -PassThru
           Invoke-Pester -Output Detailed test\CI_Workflow.Tests.ps1
+
+      - name: Unit Test
+        run: dotnet test sql-log-shipping-service-tests\LogShippingServiceTests.csproj --verbosity normal

@@ -18,7 +18,7 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Build
-        run: dotnet build LogShippingService.csproj -p:Configuration=Release -o Build
+        run: dotnet build sql-log-shipping-service\LogShippingService.csproj -p:Configuration=Release -o Build
 
       - name: Get Version
         id: GetVersion 
