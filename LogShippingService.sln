@@ -3,7 +3,9 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.5.33414.496
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LogShippingService", "LogShippingService.csproj", "{ADCA2112-4E5D-494C-8F29-22AE2A4D909A}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LogShippingService", "sql-log-shipping-service\LogShippingService.csproj", "{AD9649BD-B93E-46C7-8359-2050A17EE834}"
+EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "LogShippingServiceTests", "sql-log-shipping-service-tests\LogShippingServiceTests.csproj", "{A7F2B9C2-8FD7-407E-AE22-A4874A4BEA49}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -11,10 +13,14 @@ Global
 		Release|Any CPU = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
-		{ADCA2112-4E5D-494C-8F29-22AE2A4D909A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{ADCA2112-4E5D-494C-8F29-22AE2A4D909A}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{ADCA2112-4E5D-494C-8F29-22AE2A4D909A}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{ADCA2112-4E5D-494C-8F29-22AE2A4D909A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{AD9649BD-B93E-46C7-8359-2050A17EE834}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{AD9649BD-B93E-46C7-8359-2050A17EE834}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{AD9649BD-B93E-46C7-8359-2050A17EE834}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{AD9649BD-B93E-46C7-8359-2050A17EE834}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A7F2B9C2-8FD7-407E-AE22-A4874A4BEA49}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7F2B9C2-8FD7-407E-AE22-A4874A4BEA49}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7F2B9C2-8FD7-407E-AE22-A4874A4BEA49}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7F2B9C2-8FD7-407E-AE22-A4874A4BEA49}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
