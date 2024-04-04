@@ -7,6 +7,7 @@ using Serilog;
 using System.ComponentModel.DataAnnotations;
 using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text;
 using CommandLine;
 using Microsoft.Extensions.Azure;
 using static System.Collections.Specialized.BitVector32;
@@ -350,7 +351,7 @@ namespace LogShippingService
 
         public bool ShouldSerializeHours()
         {
-            return Hours != DefaultHours;
+            return Hours != DefaultHours && Hours.Count > 0;
         }
 
         public bool ShouldSerializeMaxThreads()
@@ -631,6 +632,29 @@ namespace LogShippingService
 
             // Write the updated JSON back to the appsettings.json file
             File.WriteAllText(ConfigFile, configJson.ToString(Formatting.Indented));
+        }
+
+        public override string ToString()
+        {
+            var properties = GetType().GetProperties().Where(p => !Attribute.IsDefined(p, typeof(JsonIgnoreAttribute))).OrderBy(p => p.Name);
+            var stringBuilder = new StringBuilder();
+            foreach (var property in properties)
+            {
+                var value = property.GetValue(this);
+                if (value is HashSet<int> hashSet)
+                {
+                    stringBuilder.AppendLine($"{property.Name}: {string.Join(", ", hashSet)}");
+                }
+                else if (value is HashSet<string> stringHashSet)
+                {
+                    stringBuilder.AppendLine($"{property.Name}: {string.Join(", ", stringHashSet)}");
+                }
+                else
+                {
+                    stringBuilder.AppendLine($"{property.Name}: {value}");
+                }
+            }
+            return stringBuilder.ToString();
         }
     }
 }
