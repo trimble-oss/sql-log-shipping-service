@@ -39,6 +39,7 @@ namespace LogShippingService
 
             var cliApply = AppConfig.Config.ApplyCommandLineOptions(args);
 
+            Log.Information("Configuration:\n" + AppConfig.Config.ToString());
             try
             {
                 AppConfig.Config.ValidateConfig();
