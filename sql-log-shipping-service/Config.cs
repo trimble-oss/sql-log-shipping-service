@@ -624,6 +624,11 @@ namespace LogShippingService
                             {
                                 KillUserConnectionsWithRollbackAfter = (int)opts.KillUserConnectionsWithRollbackAfter;
                             }
+
+                            if (opts.MaxProcessingTimeMins != null)
+                            {
+                                MaxProcessingTimeMins = (int)opts.MaxProcessingTimeMins;
+                            }
                         }
                         catch (Exception ex)
                         {
