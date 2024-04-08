@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using CommandLine;
@@ -101,5 +102,11 @@ namespace LogShippingService
 
         [Option("StandbyFileName", Required = false, HelpText = @"Option to bring database online in STANDBY mode.  Set path to file including {DatabaseName} token. e.g. --StandbyFileName ""D:\Standby\{DatabaseName}_Standby.BAK""")]
         public string? StandbyFileName { get; set; }
+
+        [Option("KillUserConnections", Required = false, HelpText = @"Kill user connections before restore.  For use with STANDBY so open connections don't prevent restore operations.  Default: true.")]
+        public  bool? KillUserConnections { get; set; }
+
+        [Option("KillUserConnectionsWithRollbackAfter", Required = false, HelpText = @"'WITH ROLLBACK AFTER' option for killing user connections.  Default 60 seconds.")]
+        public int? KillUserConnectionsWithRollbackAfter { get; set; }
     }
 }
