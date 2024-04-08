@@ -36,7 +36,7 @@ namespace LogShippingService
             SetupLogging(configuration);
             AppConfig.Config = configuration.GetSection("Config").Get<Config>() ?? new Config();
 
-            var cliApply = AppConfig.Config.ApplyCommandLineOptions(args);
+            AppConfig.Config.ApplyCommandLineOptions(args);
 
             Log.Information("Configuration:\n" + AppConfig.Config.ToString());
             try
@@ -46,10 +46,6 @@ namespace LogShippingService
             catch (Exception ex)
             {
                 Log.Error(ex, "Error validating config.");
-                return;
-            }
-            if (cliApply)
-            {
                 return;
             }
 

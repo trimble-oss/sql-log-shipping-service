@@ -98,5 +98,8 @@ namespace LogShippingService
 
         [Option("Hours", Required = false, HelpText = @"Hours that log restores are allowed to run. Set to -1 to include ALL hours (default).  e.g. --Hours 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23")]
         public IEnumerable<int>? Hours { get; set; }
+
+        [Option("StandbyFileName", Required = false, HelpText = @"Option to bring database online in STANDBY mode.  Set path to file including {DatabaseName} token. e.g. --StandbyFileName ""D:\Standby\{DatabaseName}_Standby.BAK""")]
+        public string? StandbyFileName { get; set; }
     }
 }

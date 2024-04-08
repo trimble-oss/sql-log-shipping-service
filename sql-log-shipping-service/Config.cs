@@ -7,6 +7,7 @@ using Serilog;
 using System.ComponentModel.DataAnnotations;
 using System.Drawing.Drawing2D;
 using System.Globalization;
+using System.Net.Mime;
 using System.Runtime.CompilerServices;
 using System.Text;
 using CommandLine;
@@ -415,7 +416,6 @@ namespace LogShippingService
         public bool ApplyCommandLineOptions(string[] args)
         {
             if (args.Length == 0) return false;
-
             var cfg = AppConfig.Config;
 
             var errorCount = 0;
@@ -594,6 +594,11 @@ namespace LogShippingService
                             {
                                 Hours = opts.Hours.ToHashSet();
                             }
+
+                            if (opts.StandbyFileName != null)
+                            {
+                                StandbyFileName = opts.StandbyFileName;
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -606,8 +611,14 @@ namespace LogShippingService
             if (errorCount == 0 && result.Tag == ParserResultType.Parsed)
             {
                 Save();
-                Log.Information("Configuration updated.  Restart the service.");
                 Console.WriteLine(File.ReadAllText(ConfigFile));
+                Log.Information("Configuration updated.  Restart the service.");
+                Environment.Exit(0);
+            }
+            else
+            {
+                Log.Error("Configuration not updated.  Please check the command line options.");
+                Environment.Exit(1);
             }
 
             return true;
