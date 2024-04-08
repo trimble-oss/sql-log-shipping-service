@@ -28,6 +28,7 @@ namespace LogShippingService
         private const int PollForNewDatabasesFrequencyDefault = 10;
         private const int KillUserConnectionsWithRollbackAfterDefault = 60;
         private bool _encryptionRequired = false;
+        private char[] invalidPathChars => Path.GetInvalidPathChars().Concat(new[] { '"' }).ToArray();
 
         [JsonIgnore]
         public bool EncryptionRequired => _encryptionRequired;
@@ -99,6 +100,11 @@ namespace LogShippingService
                 if (!string.IsNullOrEmpty(value) && !value.Contains(DatabaseToken))
                 {
                     throw new ArgumentException($"Missing {DatabaseToken} token from LogFilePath");
+                }
+                
+                if (value != null && value.IndexOfAny(invalidPathChars) >= 0)
+                {
+                    throw new ArgumentException($"LogFilePath contains invalid characters: {value}");
                 }
                 _logFilePath = value ?? string.Empty;
             }
@@ -231,6 +237,11 @@ namespace LogShippingService
                 {
                     throw new ArgumentException($"Missing {DatabaseToken} token from FullFilePath");
                 }
+                // Check if path contains invalid characters
+                if (value != null && value.IndexOfAny(invalidPathChars) >=0)
+                {
+                    throw new ArgumentException($"FullFilePath contains invalid characters: {value}");
+                }
                 _fullFilePath = value;
             }
         }
@@ -245,6 +256,10 @@ namespace LogShippingService
                 if (!string.IsNullOrEmpty(value) && !value.Contains(DatabaseToken))
                 {
                     throw new ArgumentException($"Missing {DatabaseToken} token from DiffFilePath");
+                }
+                if (value != null && value.IndexOfAny(invalidPathChars) >= 0)
+                {
+                    throw new ArgumentException($"DiffFilePath contains invalid characters: {value}");
                 }
                 _diffFilePath = value;
             }
