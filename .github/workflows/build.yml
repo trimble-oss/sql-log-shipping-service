@@ -50,12 +50,16 @@ jobs:
           Remove-DbaDatabase -SqlInstance localhost -Database LogShipping1,LogShipping2,LogShipping3 -Confirm:$false
           Get-DbaDatabase -SqlInstance localhost -ExcludeSystem | Select-Object {$_.Name}
           
-      - name: Configure
+      - name: Deploy App
         run: | 
           New-Item -Path C:\sql-log-shipping-service -ItemType Directory
           New-Item -Path C:\Standby -ItemType Directory
-          Copy-Item -Path .\test\appsettings.json.test -Destination C:\sql-log-shipping-service\appsettings.json
           Copy-Item -Path .\Build\* -Destination C:\sql-log-shipping-service -Recurse
+      
+      - name: Configure
+        shell: cmd
+        run: | 
+          "C:\sql-log-shipping-service\LogShippingService.exe" --Destination "Data Source=LOCALHOST;Integrated Security=True;Encrypt=True;Trust Server Certificate=True" --LogFilePath "C:\Backup\\LOG\{DatabaseName}\" --FullFilePath "C:\\Backup\FULL\{DatabaseName}\" --StandbyFileName "C:\Standby\{DatabaseName}_Standby.BAK"
 
       - name: Run service
         run: | 
