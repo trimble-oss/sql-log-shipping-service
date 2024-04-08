@@ -5,6 +5,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Serilog;
 using System.ComponentModel.DataAnnotations;
+using System.Drawing.Drawing2D;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
@@ -34,8 +35,8 @@ namespace LogShippingService
         [JsonIgnore]
         public const string DatabaseToken = "{DatabaseName}";
 
-        /// <summary>Config file name</summary>
-        public const string ConfigFile = "appsettings.json";
+        /// <summary>Config file path</summary>
+        public static string ConfigFile => System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
 
         #endregion "Constants"
 

@@ -15,14 +15,13 @@ namespace LogShippingService
 {
     internal class Program
     {
-        public const string ConfigFile = "appsettings.json";
-        public static readonly NamedLocker Locker = new();
+       public static readonly NamedLocker Locker = new();
 
         private static void Main(string[] args)
         {
-            if (!File.Exists(ConfigFile))
+            if (!File.Exists(Config.ConfigFile))
             {
-                File.WriteAllText(ConfigFile, "{}");
+                File.WriteAllText(Config.ConfigFile, "{}");
             }
             Log.Logger = new LoggerConfiguration()
                 .WriteTo.Console()
