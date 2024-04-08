@@ -32,10 +32,13 @@ namespace LogShippingServiceTests
                 RecoverPartialBackupWithoutReadOnly = true,
                 SASToken = "mySASToken",
                 SourceConnectionString = "Server=.;Database=master;Integrated Security=true;",
-                Hours = new HashSet<int> { 1, 2, 3, 4, 5 }
+                Hours = new HashSet<int> { 1, 2, 3, 4, 5 },
+                StandbyFileName = "D:\\Data\\{DatabaseName}_standby.bak",
+                KillUserConnectionsWithRollbackAfter = 5,
+                KillUserConnections = false
             };
             // Pass values to LogShippingService.exe command line
-            var commandLine = $"--ContainerUrl {options.ContainerUrl} --Destination \"{options.Destination}\" --DiffFilePath \"{options.DiffFilePath}\" --FullFilePath \"{options.FullFilePath}\" --LogFilePath \"{options.LogFilePath}\" --MaxBackupAgeForInitialization {options.MaxBackupAgeForInitialization} --MoveDataFolder \"{options.MoveDataFolder}\" --MoveFileStreamFolder \"{options.MoveFileStreamFolder}\" --MoveLogFolder \"{options.MoveLogFolder}\" --MSDBPathFind \"{options.MSDBPathFind}\" --MSDBPathReplace \"{options.MSDBPathReplace}\" --PollForNewDatabasesCron \"{options.PollForNewDatabasesCron}\" --PollForNewDatabasesFrequency {options.PollForNewDatabasesFrequency} --ReadOnlyFilePath \"{options.ReadOnlyFilePath}\" --RecoverPartialBackupWithoutReadOnly {options.RecoverPartialBackupWithoutReadOnly} --SASToken \"{options.SASToken}\" --SourceConnectionString \"{options.SourceConnectionString}\" --Hours {string.Join(' ', options.Hours)}";
+            var commandLine = $"--ContainerUrl {options.ContainerUrl} --Destination \"{options.Destination}\" --DiffFilePath \"{options.DiffFilePath}\" --FullFilePath \"{options.FullFilePath}\" --LogFilePath \"{options.LogFilePath}\" --MaxBackupAgeForInitialization {options.MaxBackupAgeForInitialization} --MoveDataFolder \"{options.MoveDataFolder}\" --MoveFileStreamFolder \"{options.MoveFileStreamFolder}\" --MoveLogFolder \"{options.MoveLogFolder}\" --MSDBPathFind \"{options.MSDBPathFind}\" --MSDBPathReplace \"{options.MSDBPathReplace}\" --PollForNewDatabasesCron \"{options.PollForNewDatabasesCron}\" --PollForNewDatabasesFrequency {options.PollForNewDatabasesFrequency} --ReadOnlyFilePath \"{options.ReadOnlyFilePath}\" --RecoverPartialBackupWithoutReadOnly {options.RecoverPartialBackupWithoutReadOnly} --SASToken \"{options.SASToken}\" --SourceConnectionString \"{options.SourceConnectionString}\" --Hours {string.Join(' ', options.Hours)} --StandbyFileName \"{options.StandbyFileName}\" --KillUserConnectionsWithRollbackAfter {options.KillUserConnectionsWithRollbackAfter} --KillUserConnections {options.KillUserConnections}";
 
             // Call LogShippingService.exe with the command line arguments
             var p = new Process()
@@ -83,6 +86,9 @@ namespace LogShippingServiceTests
             Assert.AreEqual(options.RecoverPartialBackupWithoutReadOnly, config.RecoverPartialBackupWithoutReadOnly);
             Assert.AreEqual(options.SASToken, config.SASToken);
             Assert.AreEqual(options.SourceConnectionString, config.SourceConnectionString);
+            Assert.AreEqual(options.StandbyFileName, config.StandbyFileName);
+            Assert.AreEqual(options.KillUserConnectionsWithRollbackAfter, config.KillUserConnectionsWithRollbackAfter);
+            Assert.AreEqual(options.KillUserConnections, config.KillUserConnections);
             CollectionAssert.AreEquivalent(options.Hours.ToList(), config.Hours.ToList());
         }
     }
