@@ -13,7 +13,7 @@ namespace LogShippingService
         [Option("Destination", Required = false, HelpText = "Target server connection string.  SQL Instance to restore transaction logs to.")]
         public string? Destination { get; set; }
 
-        [Option("LogFilePath", Required = false, HelpText = @"Path for transaction logs.  Most include {DatabaseName} token.  e.g. \\BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\FULL")]
+        [Option("LogFilePath", Required = false, HelpText = @"Path for transaction logs.  Most include {DatabaseName} token.  Don't include trailing '\'.  e.g. \\BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\FULL")]
         public string? LogFilePath { get; set; }
 
         [Option("SASToken", Required = false, HelpText = "SASToken for Azure blob.  Allows app to query for files in blob container.")]
@@ -31,10 +31,10 @@ namespace LogShippingService
         [Option("MSDBPathReplace", Required = false, HelpText = "Use MSDBPathFind/MSDBPathReplace to do a find/replace on the backup paths returned from msdb history.  e.g. Convert a local path to a UNC path ")]
         public string? MSDBPathReplace { get; set; }
 
-        [Option("FullFilePath", Required = false, HelpText = @"Full backup file path.  Used to initialize new databases.  Include {DatabaseName} token in the path. e.g. \\BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\FULL")]
+        [Option("FullFilePath", Required = false, HelpText = @"Full backup file path.  Used to initialize new databases.  Include {DatabaseName} token in the path. Don't include trailing '\'. e.g. \\BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\FULL")]
         public string? FullFilePath { get; set; }
 
-        [Option("DiffFilePath", Required = false, HelpText = @"Diff backup file path.  Use with FullFilePath to initialize new databases. Include {DatabaseName} token in the path. e.g. \\BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\DIFF")]
+        [Option("DiffFilePath", Required = false, HelpText = @"Diff backup file path.  Use with FullFilePath to initialize new databases. Include {DatabaseName} token in the path. Don't include trailing '\'. e.g. \\BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\DIFF")]
         public string? DiffFilePath { get; set; }
 
         [Option("ReadOnlyFilePath", Required = false, HelpText = @"Read only backup file path.  Used to initialize new databases for databases with readonly filegroups & partial backups.  Include {DatabaseName} token in the path. e.g. \\BACKUPSERVER\Backups\SERVERNAME\{DatabaseName}\READONLY")]
