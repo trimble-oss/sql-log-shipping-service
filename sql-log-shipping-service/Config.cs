@@ -640,6 +640,10 @@ namespace LogShippingService
                 Log.Information("Configuration updated.  Restart the service.");
                 Environment.Exit(0);
             }
+            else if (result.Errors.Any(ex => ex is HelpRequestedError or VersionRequestedError))
+            {
+                Environment.Exit(0);
+            }
             else
             {
                 Log.Error("Configuration not updated.  Please check the command line options.");
