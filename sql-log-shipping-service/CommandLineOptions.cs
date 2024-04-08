@@ -108,5 +108,8 @@ namespace LogShippingService
 
         [Option("KillUserConnectionsWithRollbackAfter", Required = false, HelpText = @"'WITH ROLLBACK AFTER' option for killing user connections.  Default 60 seconds.")]
         public int? KillUserConnectionsWithRollbackAfter { get; set; }
+
+        [Option("MaxProcessingTimeMins", Required = false, HelpText = @"Max time in minutes to spend processing an individual database each iteration.")]
+        public int? MaxProcessingTimeMins { get; set; }
     }
 }
