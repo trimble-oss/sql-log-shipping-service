@@ -599,6 +599,16 @@ namespace LogShippingService
                             {
                                 StandbyFileName = opts.StandbyFileName;
                             }
+
+                            if (opts.KillUserConnections != null)
+                            {
+                                KillUserConnections = (bool)opts.KillUserConnections;
+                            }
+
+                            if (opts.KillUserConnectionsWithRollbackAfter != null)
+                            {
+                                KillUserConnectionsWithRollbackAfter = (int)opts.KillUserConnectionsWithRollbackAfter;
+                            }
                         }
                         catch (Exception ex)
                         {
