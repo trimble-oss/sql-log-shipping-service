@@ -430,7 +430,13 @@ namespace LogShippingService
 
         public bool ApplyCommandLineOptions(string[] args)
         {
+            var serviceArgs = new[] { "-displayname", "-servicename" };
             if (args.Length == 0) return false;
+            // We might have -displayname or -servicename as arguments when running as a service.  In this case we don't want to process the command line arguments
+            if (args.Any(arg => serviceArgs.Contains(arg, StringComparer.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
             var cfg = AppConfig.Config;
 
             var errorCount = 0;
@@ -651,7 +657,7 @@ namespace LogShippingService
             }
             else
             {
-                Log.Error("Configuration not updated.  Please check the command line options.");
+                Log.Error("Configuration not updated.  Please check the command line options.{args}",args);
                 Environment.Exit(1);
             }
 
