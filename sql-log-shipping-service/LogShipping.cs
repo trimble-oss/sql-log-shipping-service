@@ -226,7 +226,7 @@ namespace LogShippingService
             }
         }
 
-        private static Task RestoreLogs(List<string> logFiles, string db, bool reProcess, CancellationToken stoppingToken)
+        private static Task RestoreLogs(IEnumerable<BackupFile> logFiles, string db, bool reProcess, CancellationToken stoppingToken)
         {
             BigInteger? redoStartOrPreviousLastLSN = null;
             if (Config.CheckHeaders)
@@ -238,7 +238,7 @@ namespace LogShippingService
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
             bool breakProcessingFlag = false;
             var stopAt = Config.StopAt > DateTime.MinValue && Config.StopAt < DateTime.MaxValue ? ", STOPAT=" + Config.StopAt.ToString("yyyy-MM-ddTHH:mm:ss.fff").SqlSingleQuote() : "";
-            foreach (var logPath in logFiles)
+            foreach (var logBackup in logFiles)
             {
                 if (DateTime.Now > maxTime)
                 {
@@ -260,8 +260,8 @@ namespace LogShippingService
                     break;
                 }
 
-                var file = logPath.SqlSingleQuote();
-                var urlOrDisk = string.IsNullOrEmpty(Config.ContainerUrl) ? "DISK" : "URL";
+                var file = logBackup.FilePath.SqlSingleQuote();
+                var urlOrDisk = Config.DeviceType == BackupHeader.DeviceTypes.Disk ? "DISK" : "URL";
                 var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY{stopAt}";
 
                 if (Config.CheckHeaders)
@@ -269,20 +269,17 @@ namespace LogShippingService
                     List<BackupHeader> headers;
                     try
                     {
-                        headers = BackupHeader.GetHeaders(logPath, Config.Destination,
-                            string.IsNullOrEmpty(Config.ContainerUrl)
-                                ? BackupHeader.DeviceTypes.Disk
-                                : BackupHeader.DeviceTypes.Url);
+                        headers = logBackup.Headers;
                     }
                     catch (SqlException ex)
                     {
-                        Log.Error(ex, "Error reading backup header for {logPath}.  Skipping file.", ex);
+                        Log.Error(ex, "Error reading backup header for {logPath}.  Skipping file.", logBackup.FilePath);
                         continue;
                     }
 
                     if (headers.Count > 1) // Multiple logical backups in single file. This is now handled, but log a warning as it's unexpected.
                     {
-                        Log.Warning("Log File {logPath} contains {count} backups.  Expected 1, but each will be processed.", logPath, headers.Count);
+                        Log.Warning("Log File {logPath} contains {count} backups.  Expected 1, but each will be processed.", logBackup.FilePath, headers.Count);
                     }
 
                     foreach (var header in headers)
@@ -291,12 +288,12 @@ namespace LogShippingService
                         if (!string.Equals(header.DatabaseName, db, StringComparison.OrdinalIgnoreCase))
                         {
                             throw new HeaderVerificationException(
-                                $"Header verification failed for {logPath}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
+                                $"Header verification failed for {logBackup}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
                         }
 
                         if (Config.RestoreDelayMins > 0 && DateTime.Now.Subtract(header.BackupFinishDate).TotalMinutes < Config.RestoreDelayMins)
                         {
-                            Log.Information("Waiting to restore {logPath} & subsequent files.  Backup Finish Date: {BackupFinishDate}. Eligible for restore after {RestoreAfter}, RestoreDelayMins:{RestoreDelay}", logPath, header.BackupFinishDate, header.BackupFinishDate.AddMinutes(Config.RestoreDelayMins), Config.RestoreDelayMins);
+                            Log.Information("Waiting to restore {logPath} & subsequent files.  Backup Finish Date: {BackupFinishDate}. Eligible for restore after {RestoreAfter}, RestoreDelayMins:{RestoreDelay}", logBackup.FilePath, header.BackupFinishDate, header.BackupFinishDate.AddMinutes(Config.RestoreDelayMins), Config.RestoreDelayMins);
                             breakProcessingFlag = true;
                             break;
                         }
@@ -304,33 +301,33 @@ namespace LogShippingService
                         {
                             if (reProcess) // Reprocess previous file if we got a too recent error, otherwise skip it
                             {
-                                Log.Information("Re-processing {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.Position, header.FirstLSN, header.LastLSN);
+                                Log.Information("Re-processing {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
                                 continue;
                             }
                             else
                             {
-                                Log.Information("Skipping {logPath}, FILE={Position}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.Position, header.FirstLSN, header.LastLSN);
+                                Log.Information("Skipping {logPath}, FILE={Position}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
                                 continue;
                             }
                         }
                         else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN > redoStartOrPreviousLastLSN)
                         {
-                            Log.Information("Header verification successful for {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, header.Position, header.FirstLSN, header.LastLSN);
+                            Log.Information("Header verification successful for {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
                         }
                         else if (header.FirstLSN < redoStartOrPreviousLastLSN)
                         {
-                            Log.Information("Skipping {logPath}.  A later LSN is required: {RequiredLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logPath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
+                            Log.Information("Skipping {logPath}.  A later LSN is required: {RequiredLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
                             continue;
                         }
                         else if (header.FirstLSN > redoStartOrPreviousLastLSN)
                         {
-                            throw new HeaderVerificationException($"Header verification failed for {logPath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
+                            throw new HeaderVerificationException($"Header verification failed for {logBackup.FilePath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
                         }
 
                         var completed = ProcessRestoreCommand(sql, db, file);
                         if (completed && Config.StopAt != DateTime.MinValue && header.BackupFinishDate >= Config.StopAt)
                         {
-                            Log.Information("StopAt target reached for {db}.  Last log: {logPath}.  Backup Finish Date: {BackupFinishDate}. StopAt: {StopAt}", db, logPath, header.BackupFinishDate, Config.StopAt);
+                            Log.Information("StopAt target reached for {db}.  Last log: {logPath}.  Backup Finish Date: {BackupFinishDate}. StopAt: {StopAt}", db, logBackup.FilePath, header.BackupFinishDate, Config.StopAt);
                             lock (locker) // Prevent future processing of this DB
                             {
                                 Config.ExcludedDatabases.Add(db); // Exclude this DB from future processing
@@ -451,55 +448,19 @@ namespace LogShippingService
             return dt;
         }
 
-        private static List<string> GetFilesForDb(string db, DateTime fromDate)
+        private static IEnumerable<BackupFile> GetFilesForDb(string db, DateTime fromDate)
         {
             var path = Config.LogFilePath!.Replace(Config.DatabaseToken, db);
-            List<string> logFiles;
-            if (string.IsNullOrEmpty(Config.ContainerUrl))
+            IEnumerable<BackupFile> logFiles;
+
+            using (var op = Operation.Begin("Get logs for {DatabaseName} after {date} (Offset:{offset}) from {path}", db,
+                       fromDate, Config.OffsetMins, path))
             {
-                using (var op = Operation.Begin("Get logs for {DatabaseName} after {date} (Offset:{offset}) from {path}", db,
-                           fromDate, Config.OffsetMins, path))
-                {
-                    logFiles = GetFilesForDbUnc(path, fromDate);
-                    op.Complete();
-                }
+                logFiles = FileHandler.GetFiles(path, "*.trn", fromDate, true);
+                op.Complete();
             }
-            else
-            {
-                using (var op = Operation.Begin("Query Azure Blob for {DatabaseName} after {date} (Offset:{offset}):{prefix}", db, fromDate, Config.OffsetMins, path))
-                {
-                    logFiles = GetFilesForDbAzBlob(path, fromDate);
-                    op.Complete();
-                }
-            }
+
             return logFiles;
-        }
-
-        private static List<string> GetFilesForDbUnc(string path, DateTime fromDate)
-        {
-            var files = new DirectoryInfo(path)
-                .GetFiles("*.trn", SearchOption.AllDirectories)
-                .Where(file => file.LastWriteTime > fromDate)
-                .OrderBy(f => f.LastWriteTime)
-                .Select(file => file.FullName)
-                .ToList();
-
-            return files;
-        }
-
-        public static List<string> GetFilesForDbAzBlob(string prefix, DateTime fromDate)
-        {
-            var containerUri = new Uri(Config.ContainerUrl + Config.SASToken);
-            var containerClient = new BlobContainerClient(containerUri);
-
-            var filteredBlobs = containerClient
-                .GetBlobs(BlobTraits.Metadata, BlobStates.None, prefix)
-                .Where(blobItem => blobItem.Properties.LastModified > fromDate)
-                .OrderBy(blobItem => blobItem.Properties.LastModified)
-                .Select(blobItem => Config.ContainerUrl + "/" + blobItem.Name)
-                .ToList();
-
-            return filteredBlobs;
         }
     }
 }
