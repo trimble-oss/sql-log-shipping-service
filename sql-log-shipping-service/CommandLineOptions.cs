@@ -104,12 +104,18 @@ namespace LogShippingService
         public string? StandbyFileName { get; set; }
 
         [Option("KillUserConnections", Required = false, HelpText = @"Kill user connections before restore.  For use with STANDBY so open connections don't prevent restore operations.  Default: true.")]
-        public  bool? KillUserConnections { get; set; }
+        public bool? KillUserConnections { get; set; }
 
         [Option("KillUserConnectionsWithRollbackAfter", Required = false, HelpText = @"'WITH ROLLBACK AFTER' option for killing user connections.  Default 60 seconds.")]
         public int? KillUserConnectionsWithRollbackAfter { get; set; }
 
         [Option("MaxProcessingTimeMins", Required = false, HelpText = @"Max time in minutes to spend processing an individual database each iteration.")]
         public int? MaxProcessingTimeMins { get; set; }
+
+        [Option("AccessKey", Required = false, HelpText = @"S3 Access Key - use when log shipping from a S3 bucket or leave blank to use instance profile credentials")]
+        public string? AccessKey { get; set; }
+
+        [Option("SecretKey", Required = false, HelpText = @"S3 Secret Key - use when log shipping from a S3 bucket or leave blank to use instance profile credentials")]
+        public string? SecretKey { get; set; }
     }
 }

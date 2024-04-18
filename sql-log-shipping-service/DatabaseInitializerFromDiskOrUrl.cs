@@ -6,7 +6,7 @@ namespace LogShippingService
 {
     public class DatabaseInitializerFromDiskOrUrl : DatabaseInitializerBase
     {
-        public BackupHeader.DeviceTypes DeviceType = FileHandler.DeviceType;
+        public BackupHeader.DeviceTypes DeviceType => Config.DeviceType;
         private static Config Config => AppConfig.Config;
 
         public override bool IsValidated
@@ -149,7 +149,7 @@ namespace LogShippingService
             var familyGUID = fullFiles[0].FirstHeader.FamilyGUID;
 
             ReadOnlyBackupSet? backupSet = null;
-            foreach (var backupFile in FileHandler.GetFiles(path, "*.BAK", DateTime.MinValue))
+            foreach (var backupFile in FileHandler.GetFiles(path, "*.BAK", DateTime.MinValue, false))
             {
                 if (backupSet != null && backupSet.BackupFiles[0].FirstHeader.BackupSetGUID == backupFile.FirstHeader.BackupSetGUID) // File is part of the same set as previous.  Add to previous backupset and continue
                 {
@@ -200,7 +200,7 @@ namespace LogShippingService
             var directory = new DirectoryInfo(folder);
 
             var files = FileHandler.GetFiles(folder, "*.bak",
-                DateTime.Now.AddDays(-Config.MaxBackupAgeForInitialization));
+                DateTime.Now.AddDays(-Config.MaxBackupAgeForInitialization), false);
 
             BackupFile? previousFile = null;
             var backupSetGuid = Guid.Empty;

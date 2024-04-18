@@ -13,6 +13,7 @@ using System.Text;
 using CommandLine;
 using Microsoft.Extensions.Azure;
 using static System.Collections.Specialized.BitVector32;
+using static LogShippingService.FileHandler;
 
 namespace LogShippingService
 {
@@ -41,6 +42,40 @@ namespace LogShippingService
         public static string ConfigFile => System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
 
         #endregion "Constants"
+
+        #region "File Handling"
+
+        public enum FileHandlerTypes
+        {
+            Disk,
+            AzureBlob,
+            S3
+        }
+
+        [JsonIgnore]
+        public FileHandlerTypes FileHandlerType
+        {
+            get
+            {
+                if (LogFilePath != null && LogFilePath.StartsWith("s3://"))
+                {
+                    return FileHandlerTypes.S3;
+                }
+                else if (!string.IsNullOrEmpty(ContainerUrl) && !string.IsNullOrEmpty(SASToken))
+                {
+                    return FileHandlerTypes.AzureBlob;
+                }
+                else
+                {
+                    return FileHandlerTypes.Disk;
+                }
+            }
+        }
+
+        [JsonIgnore]
+        public BackupHeader.DeviceTypes DeviceType => FileHandlerType == FileHandlerTypes.Disk ? BackupHeader.DeviceTypes.Disk : BackupHeader.DeviceTypes.Url;
+
+        #endregion "File Handling"
 
         #region Azure
 
@@ -84,6 +119,49 @@ namespace LogShippingService
 
         #endregion Azure
 
+        #region S3
+
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? AccessKey { get; set; }
+
+        [JsonIgnore]
+        public string? SecretKey
+        {
+            get => _secretKey;
+            set => SetSecretKey(value);
+        }
+
+        private string? _secretKey;
+
+        [JsonProperty("SecretKey", DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? SecretKeyEncrypted
+        {
+            get => !string.IsNullOrEmpty(SecretKey) ? EncryptionHelper.EncryptWithMachineKey(SecretKey) : null;
+            set => SetSecretKey(value);
+        }
+
+        private void SetSecretKey(string? value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                _secretKey = null;
+            }
+            else if (EncryptionHelper.IsEncrypted(value))
+            {
+                _secretKey = EncryptionHelper.DecryptWithMachineKey(value);
+            }
+            else
+            {
+                _secretKey = value;
+                _encryptionRequired = true;
+            }
+        }
+
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? BucketName { get; set; }
+
+        #endregion S3
+
         #region BasicConfig
 
         private string _logFilePath = string.Empty;
@@ -101,7 +179,7 @@ namespace LogShippingService
                 {
                     throw new ArgumentException($"Missing {DatabaseToken} token from LogFilePath");
                 }
-                
+
                 if (value != null && value.IndexOfAny(invalidPathChars) >= 0)
                 {
                     throw new ArgumentException($"LogFilePath contains invalid characters: {value}");
@@ -238,7 +316,7 @@ namespace LogShippingService
                     throw new ArgumentException($"Missing {DatabaseToken} token from FullFilePath");
                 }
                 // Check if path contains invalid characters
-                if (value != null && value.IndexOfAny(invalidPathChars) >=0)
+                if (value != null && value.IndexOfAny(invalidPathChars) >= 0)
                 {
                     throw new ArgumentException($"FullFilePath contains invalid characters: {value}");
                 }
@@ -400,7 +478,7 @@ namespace LogShippingService
 
         public void ValidateConfig()
         {
-            if (!string.IsNullOrEmpty(ContainerUrl) && string.IsNullOrEmpty(SASToken))
+            if (!string.IsNullOrEmpty(ContainerUrl) && string.IsNullOrEmpty(SASToken) && ContainerUrl.StartsWith("https://", StringComparison.InvariantCultureIgnoreCase))
             {
                 var message = "SASToken is required with ContainerUrl";
                 Log.Error(message);
@@ -635,6 +713,16 @@ namespace LogShippingService
                             {
                                 MaxProcessingTimeMins = (int)opts.MaxProcessingTimeMins;
                             }
+
+                            if (opts.AccessKey != null)
+                            {
+                                AccessKey = opts.AccessKey;
+                            }
+
+                            if (opts.SecretKey != null)
+                            {
+                                SecretKey = opts.SecretKey;
+                            }
                         }
                         catch (Exception ex)
                         {
@@ -657,7 +745,7 @@ namespace LogShippingService
             }
             else
             {
-                Log.Error("Configuration not updated.  Please check the command line options.{args}",args);
+                Log.Error("Configuration not updated.  Please check the command line options.{args}", args);
                 Environment.Exit(1);
             }
 
