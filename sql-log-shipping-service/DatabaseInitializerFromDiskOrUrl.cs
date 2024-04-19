@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using Accessibility;
+using LogShippingService.FileHandling;
 using Serilog;
 
 namespace LogShippingService
@@ -31,7 +32,7 @@ namespace LogShippingService
         {
             if (string.IsNullOrEmpty(Config.FullFilePath)) return;
 
-            Parallel.ForEach(FileHandler.GetDatabases(),
+            Parallel.ForEach(FileHandler.FileHandlerInstance.GetDatabases(),
                 new ParallelOptions { MaxDegreeOfParallelism = Config.MaxThreads },
                 (database, state) =>
                 {
@@ -149,7 +150,7 @@ namespace LogShippingService
             var familyGUID = fullFiles[0].FirstHeader.FamilyGUID;
 
             ReadOnlyBackupSet? backupSet = null;
-            foreach (var backupFile in FileHandler.GetFiles(path, "*.BAK", DateTime.MinValue, false))
+            foreach (var backupFile in FileHandler.FileHandlerInstance.GetFiles(path, "*.BAK", DateTime.MinValue, false))
             {
                 if (backupSet != null && backupSet.BackupFiles[0].FirstHeader.BackupSetGUID == backupFile.FirstHeader.BackupSetGUID) // File is part of the same set as previous.  Add to previous backupset and continue
                 {
@@ -199,7 +200,7 @@ namespace LogShippingService
             List<BackupFile> fileList = new();
             var directory = new DirectoryInfo(folder);
 
-            var files = FileHandler.GetFiles(folder, "*.bak",
+            var files = FileHandler.FileHandlerInstance.GetFiles(folder, "*.bak",
                 DateTime.Now.AddDays(-Config.MaxBackupAgeForInitialization), false);
 
             BackupFile? previousFile = null;

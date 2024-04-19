@@ -13,7 +13,7 @@ using System.Text;
 using CommandLine;
 using Microsoft.Extensions.Azure;
 using static System.Collections.Specialized.BitVector32;
-using static LogShippingService.FileHandler;
+using static LogShippingService.FileHandling.FileHandler;
 
 namespace LogShippingService
 {
