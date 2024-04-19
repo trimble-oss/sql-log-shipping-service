@@ -141,7 +141,15 @@ namespace LogShippingService
             DataTable dt;
             using (Operation.Time("GetDatabases"))
             {
-                dt = GetDatabases();
+                try
+                {
+                    dt = GetDatabases();
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Error getting databases");
+                    return Task.CompletedTask;
+                }
             }
 
             Parallel.ForEach(dt.AsEnumerable(), new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads }, row =>
@@ -155,8 +163,14 @@ namespace LogShippingService
                 }
                 var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
                 fromDate = fromDate.AddMinutes(Config.OffsetMins);
-
-                ProcessDatabase(db, fromDate, stoppingToken);
+                try
+                {
+                    ProcessDatabase(db, fromDate, stoppingToken);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Error processing database {db}", db);
+                }
             });
             return Task.CompletedTask;
         }
