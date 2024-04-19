@@ -244,16 +244,19 @@ namespace LogShippingService
             {
                 if (DateTime.Now > maxTime)
                 {
+                    RestoreWithStandby(db); // Return database to standby mode
                     // Stop processing logs if max processing time is exceeded. Prevents a single DatabaseName that has fallen behind from impacting other DBs
                     throw new TimeoutException("Max processing time exceeded");
                 }
                 if (stoppingToken.IsCancellationRequested)
                 {
+                    RestoreWithStandby(db); // Return database to standby mode
                     Log.Information("Halt log restores for {db} due to stop request", db);
                     break;
                 }
                 if (!Waiter.CanRestoreLogsNow)
                 {
+                    RestoreWithStandby(db); // Return database to standby mode
                     Log.Information("Halt log restores for {db} due to Hours configuration", db);
                     break;
                 }
