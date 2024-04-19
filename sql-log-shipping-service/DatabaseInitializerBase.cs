@@ -1,6 +1,7 @@
 ﻿using Serilog;
 using static LogShippingService.BackupHeader;
 using System.Reflection.PortableExecutable;
+using LogShippingService.FileHandling;
 using SerilogTimings;
 
 namespace LogShippingService

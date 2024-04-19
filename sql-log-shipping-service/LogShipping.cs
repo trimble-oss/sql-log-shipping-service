@@ -11,6 +11,7 @@ using System.Numerics;
 using Microsoft.Extensions.Hosting;
 using System.Linq.Expressions;
 using System.Security.Permissions;
+using LogShippingService.FileHandling;
 
 namespace LogShippingService
 {
@@ -154,6 +155,7 @@ namespace LogShippingService
                 }
                 var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
                 fromDate = fromDate.AddMinutes(Config.OffsetMins);
+
                 ProcessDatabase(db, fromDate, stoppingToken);
             });
             return Task.CompletedTask;
@@ -456,7 +458,7 @@ namespace LogShippingService
             using (var op = Operation.Begin("Get logs for {DatabaseName} after {date} (Offset:{offset}) from {path}", db,
                        fromDate, Config.OffsetMins, path))
             {
-                logFiles = FileHandler.GetFiles(path, "*.trn", fromDate, true);
+                logFiles = FileHandler.FileHandlerInstance.GetFiles(path, "*.trn", fromDate, true);
                 op.Complete();
             }
 
