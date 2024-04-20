@@ -735,11 +735,18 @@ namespace LogShippingService
             if (errorCount == 0 && result.Tag == ParserResultType.Parsed)
             {
                 Save();
+                Console.WriteLine("Configuration updated:");
                 Console.WriteLine(File.ReadAllText(ConfigFile));
                 Log.Information("Configuration updated.  Restart the service.");
                 Environment.Exit(0);
             }
-            else if (result.Errors.Any(ex => ex is HelpRequestedError or VersionRequestedError))
+            else if (result.Errors.Any(ex => ex is HelpRequestedError))
+            {
+                Console.WriteLine("Current Config:");
+                Console.WriteLine(File.ReadAllText(ConfigFile));
+                Environment.Exit(0);
+            }
+            else if (result.Errors.Any(ex => ex is VersionRequestedError))
             {
                 Environment.Exit(0);
             }
