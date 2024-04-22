@@ -157,9 +157,6 @@ namespace LogShippingService
             }
         }
 
-        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
-        public string? BucketName { get; set; }
-
         #endregion S3
 
         #region BasicConfig
