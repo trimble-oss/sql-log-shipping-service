@@ -36,10 +36,12 @@ namespace LogShippingServiceTests
                 StandbyFileName = "D:\\Data\\{DatabaseName}_standby.bak",
                 KillUserConnectionsWithRollbackAfter = 5,
                 KillUserConnections = false,
-                MaxProcessingTimeMins = 20
+                MaxProcessingTimeMins = 20,
+                AccessKey = "myAccessKey",
+                SecretKey = "mySecretKey"
             };
             // Pass values to LogShippingService.exe command line
-            var commandLine = $"--ContainerUrl {options.ContainerUrl} --Destination \"{options.Destination}\" --DiffFilePath \"{options.DiffFilePath}\" --FullFilePath \"{options.FullFilePath}\" --LogFilePath \"{options.LogFilePath}\" --MaxBackupAgeForInitialization {options.MaxBackupAgeForInitialization} --MoveDataFolder \"{options.MoveDataFolder}\" --MoveFileStreamFolder \"{options.MoveFileStreamFolder}\" --MoveLogFolder \"{options.MoveLogFolder}\" --MSDBPathFind \"{options.MSDBPathFind}\" --MSDBPathReplace \"{options.MSDBPathReplace}\" --PollForNewDatabasesCron \"{options.PollForNewDatabasesCron}\" --PollForNewDatabasesFrequency {options.PollForNewDatabasesFrequency} --ReadOnlyFilePath \"{options.ReadOnlyFilePath}\" --RecoverPartialBackupWithoutReadOnly {options.RecoverPartialBackupWithoutReadOnly} --SASToken \"{options.SASToken}\" --SourceConnectionString \"{options.SourceConnectionString}\" --Hours {string.Join(' ', options.Hours)} --StandbyFileName \"{options.StandbyFileName}\" --KillUserConnectionsWithRollbackAfter {options.KillUserConnectionsWithRollbackAfter} --KillUserConnections {options.KillUserConnections} --MaxProcessingTimeMins {options.MaxProcessingTimeMins}";
+            var commandLine = $"--ContainerUrl {options.ContainerUrl} --Destination \"{options.Destination}\" --DiffFilePath \"{options.DiffFilePath}\" --FullFilePath \"{options.FullFilePath}\" --LogFilePath \"{options.LogFilePath}\" --MaxBackupAgeForInitialization {options.MaxBackupAgeForInitialization} --MoveDataFolder \"{options.MoveDataFolder}\" --MoveFileStreamFolder \"{options.MoveFileStreamFolder}\" --MoveLogFolder \"{options.MoveLogFolder}\" --MSDBPathFind \"{options.MSDBPathFind}\" --MSDBPathReplace \"{options.MSDBPathReplace}\" --PollForNewDatabasesCron \"{options.PollForNewDatabasesCron}\" --PollForNewDatabasesFrequency {options.PollForNewDatabasesFrequency} --ReadOnlyFilePath \"{options.ReadOnlyFilePath}\" --RecoverPartialBackupWithoutReadOnly {options.RecoverPartialBackupWithoutReadOnly} --SASToken \"{options.SASToken}\" --SourceConnectionString \"{options.SourceConnectionString}\" --Hours {string.Join(' ', options.Hours)} --StandbyFileName \"{options.StandbyFileName}\" --KillUserConnectionsWithRollbackAfter {options.KillUserConnectionsWithRollbackAfter} --KillUserConnections {options.KillUserConnections} --MaxProcessingTimeMins {options.MaxProcessingTimeMins} --AccessKey \"{options.AccessKey}\" --SecretKey \"{options.SecretKey}\"";
 
             // Call LogShippingService.exe with the command line arguments
             var p = new Process()
@@ -90,7 +92,16 @@ namespace LogShippingServiceTests
             Assert.AreEqual(options.StandbyFileName, config.StandbyFileName);
             Assert.AreEqual(options.KillUserConnectionsWithRollbackAfter, config.KillUserConnectionsWithRollbackAfter);
             Assert.AreEqual(options.KillUserConnections, config.KillUserConnections);
-            Assert.AreEqual(options.MaxProcessingTimeMins,config.MaxProcessingTimeMins);
+            Assert.AreEqual(options.MaxProcessingTimeMins, config.MaxProcessingTimeMins);
+            Assert.AreEqual(options.AccessKey, config.AccessKey);
+            Assert.AreEqual(options.SecretKey, config.SecretKey); //Should be encrypted
+
+            var json = File.ReadAllText(Config.ConfigFile);
+            // Check that the secret key and access key are not stored plaintext
+            Assert.IsFalse(json.Contains(options.SecretKey));
+            Assert.IsFalse(json.Contains(options.SASToken));
+            Assert.IsTrue(json.Contains("encrypted:"));
+
             CollectionAssert.AreEquivalent(options.Hours.ToList(), config.Hours.ToList());
         }
     }
