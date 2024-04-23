@@ -4,7 +4,7 @@ This project provides a solution for automatically restoring SQL Server transact
 
 * **Simple config based setup.** *Eliminates the need for per-database basis configuration.  Very effective for handling a large number of databases*
 * **Automatic initialization of new databases**. *Incorporate new databases without any manual intervention*
-* **UNC path or URL (Azure Blob).** *Additional flexibility to work directly with Azure blob containers or with standard UNC paths.  e.g. `\\server\share`*
+* **UNC path or URL (Azure Blob or S3).** *Additional flexibility to work directly with Azure blob containers, S3 buckets or standard UNC paths.  e.g. `\\server\share`*
 * **Scalable.** *The log shipping service allows for a configurable number of threads so your SQL instance isn't overloaded with a job per database or constrained by a single job.  The service is efficient and can scale to a large number (thousands) of databases*
 * **Standby mode support.** *Allow users to query your log shipped databases.  Prevent open connections from blocking log restores with options to kill sessions after a period of time. Keep your databases available for querying during certain hours.  Standby option is only applied after the last log is restored (more efficient than built-in log shipping)*
 * **A disaster recovery tool**.  *Beyond the tools primary capability as a log shipping tool, it can also be used as part of your disaster recovery strategy to restore your databases from backup.*
