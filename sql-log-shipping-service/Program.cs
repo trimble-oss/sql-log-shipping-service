@@ -15,26 +15,22 @@ namespace LogShippingService
 {
     internal class Program
     {
-       public static readonly NamedLocker Locker = new();
+        public static readonly NamedLocker Locker = new();
 
         private static void Main(string[] args)
         {
-            if (!File.Exists(Config.ConfigFile))
-            {
-                File.WriteAllText(Config.ConfigFile, "{}");
-            }
             Log.Logger = new LoggerConfiguration()
                 .WriteTo.Console()
                 .CreateLogger();
 
             Directory.SetCurrentDirectory(AppContext.BaseDirectory);
-            var configuration = new ConfigurationBuilder()
+            var configuration = File.Exists(Config.ConfigFile) ? new ConfigurationBuilder()
                 .SetBasePath(Directory.GetCurrentDirectory())
                 .AddJsonFile("appsettings.json")
-                .Build();
+                .Build() : null;
 
             SetupLogging(configuration);
-            AppConfig.Config = configuration.GetSection("Config").Get<Config>() ?? new Config();
+            AppConfig.Config = configuration?.GetSection("Config").Get<Config>() ?? new Config();
 
             AppConfig.Config.ApplyCommandLineOptions(args);
 

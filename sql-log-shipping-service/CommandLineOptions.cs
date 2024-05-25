@@ -117,5 +117,8 @@ namespace LogShippingService
 
         [Option("SecretKey", Required = false, HelpText = @"S3 Secret Key - use when log shipping from a S3 bucket or leave blank to use instance profile credentials")]
         public string? SecretKey { get; set; }
+
+        [Option("Run", Required = false, HelpText = "Run without saving changes to the config")]
+        public bool Run { get; set; }
     }
 }

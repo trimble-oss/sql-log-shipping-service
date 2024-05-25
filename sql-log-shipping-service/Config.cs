@@ -515,6 +515,7 @@ namespace LogShippingService
             var cfg = AppConfig.Config;
 
             var errorCount = 0;
+            var run = false;
             var result = Parser.Default.ParseArguments<CommandLineOptions>(args)
                 .WithParsed<CommandLineOptions>(opts =>
                     {
@@ -720,6 +721,7 @@ namespace LogShippingService
                             {
                                 SecretKey = opts.SecretKey;
                             }
+                            run = opts.Run;
                         }
                         catch (Exception ex)
                         {
@@ -729,7 +731,12 @@ namespace LogShippingService
                     }
                 );
 
-            if (errorCount == 0 && result.Tag == ParserResultType.Parsed)
+            if (run && errorCount == 0 && result.Tag == ParserResultType.Parsed)
+            {
+                Log.Information("Running without saving changes to the config.");
+                return true;
+            }
+            else if (errorCount == 0 && result.Tag == ParserResultType.Parsed)
             {
                 Save();
                 Console.WriteLine("Configuration updated:");
@@ -761,7 +768,7 @@ namespace LogShippingService
         public void Save()
         {
             // Read the existing appsettings.json content
-            var configFileContent = File.ReadAllText(ConfigFile);
+            var configFileContent = File.Exists(ConfigFile) ? File.ReadAllText(ConfigFile) : "{}";
             var configJson = JObject.Parse(configFileContent);
 
             // Serialize the current instance of Config to JSON
