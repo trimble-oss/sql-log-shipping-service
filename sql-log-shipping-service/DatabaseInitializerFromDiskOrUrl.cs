@@ -51,11 +51,6 @@ namespace LogShippingService
             var diffFolder = Config.DiffFilePath?.Replace(Config.DatabaseToken, db);
             var readOnlyFolder = Config.ReadOnlyFilePath?.Replace(Config.DatabaseToken, db);
             if (fullFolder == null) { return; }
-            if (DeviceType == BackupHeader.DeviceTypes.Disk && !Directory.Exists(fullFolder))
-            {
-                Log.Warning("Skipping {db}.  Directory {path} doesn't exist", db, fullFolder);
-                return;
-            }
 
             var isPartial = false;
             List<BackupFile> fullFiles;
