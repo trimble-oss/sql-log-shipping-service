@@ -9,9 +9,9 @@
 	AND bs.type IN('D','I','L','P','Q')
 
 )
-SELECT d.name,
-		LR.backup_finish_date, 
-		LR.restore_date
+SELECT	d.name,
+		DATEADD(mi,DATEDIFF(mi,GETDATE(),GETUTCDATE()),LR.backup_finish_date) AS backup_finish_date, 
+		DATEADD(mi,DATEDIFF(mi,GETDATE(),GETUTCDATE()),LR.restore_date) AS restore_date
 FROM sys.databases d 
 LEFT OUTER JOIN LR ON d.name =  LR.destination_database_name AND LR.rnum=1
 WHERE (d.state = 1 OR d.is_in_standby=1)
