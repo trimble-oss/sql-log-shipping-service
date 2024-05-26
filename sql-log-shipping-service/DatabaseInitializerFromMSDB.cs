@@ -63,27 +63,27 @@ namespace LogShippingService
         /// <summary>
         /// Get the last FULL/DIFF backup for the database from msdb history & restore
         /// </summary>
-        /// <param name="db">Database name</param>
-        protected override void DoProcessDB(string db)
+        /// <param name="sourceDb">Database name</param>
+        protected override void DoProcessDB(string sourceDb, string targetDb)
         {
             if (Config.SourceConnectionString == null) return;
-            Log.Information("Initializing new database: {db}", db);
-            var lastFull = new LastBackup(db, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseFull);
-            var lastDiff = new LastBackup(db, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseDiff);
+            Log.Information("Initializing new database: {sourceDb}", sourceDb);
+            var lastFull = new LastBackup(sourceDb, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseFull);
+            var lastDiff = new LastBackup(sourceDb, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseDiff);
             ReplacePaths(ref lastFull); // Replace paths if necessary.  e.g. Convert local path to UNC path
             ReplacePaths(ref lastDiff); // Replace paths if necessary.  e.g. Convert local path to UNC path
             if (lastFull.FileList.Count == 0)
             {
-                Log.Error("No backups available to initialize {db}", db);
+                Log.Error("No backups available to initialize {sourceDb}", sourceDb);
                 return;
             }
 
-            Log.Debug("Last full for {db}: {lastFull}", db, lastFull.BackupFinishDate);
-            Log.Debug("Last diff for {db}: {lastDiff}", db, lastDiff.BackupFinishDate);
+            Log.Debug("Last full for {sourceDb}: {lastFull}", sourceDb, lastFull.BackupFinishDate);
+            Log.Debug("Last diff for {sourceDb}: {lastDiff}", sourceDb, lastDiff.BackupFinishDate);
 
             var fullHeader = lastFull.GetHeader(Config.Destination);
 
-            lastFull.Restore();
+            lastFull.Restore(targetDb);
 
             // Check if diff backup should be applied
             if (lastDiff.BackupFinishDate <= lastFull.BackupFinishDate) return;
@@ -91,7 +91,7 @@ namespace LogShippingService
             var diffHeader = lastDiff.GetHeader(Config.Destination);
             if (IsDiffApplicable(fullHeader, diffHeader))
             {
-                lastDiff.Restore();
+                lastDiff.Restore(targetDb);
             }
         }
 

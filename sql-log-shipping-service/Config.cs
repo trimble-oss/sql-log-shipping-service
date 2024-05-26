@@ -396,6 +396,12 @@ namespace LogShippingService
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         public string? MSDBPathReplace { get; set; }
 
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? RestoreDatabaseNamePrefix { get; set; }
+
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public string? RestoreDatabaseNameSuffix { get; set; }
+
         #endregion Initialization
 
         #region OtherOptions
@@ -720,6 +726,16 @@ namespace LogShippingService
                             if (opts.SecretKey != null)
                             {
                                 SecretKey = opts.SecretKey;
+                            }
+
+                            if (opts.RestoreDatabaseNamePrefix != null)
+                            {
+                                RestoreDatabaseNamePrefix = opts.RestoreDatabaseNamePrefix;
+                            }
+
+                            if (opts.RestoreDatabaseNameSuffix != null)
+                            {
+                                RestoreDatabaseNameSuffix = opts.RestoreDatabaseNameSuffix;
                             }
                             run = opts.Run;
                         }

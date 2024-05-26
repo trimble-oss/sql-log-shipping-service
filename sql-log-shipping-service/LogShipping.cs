@@ -1,17 +1,11 @@
-﻿using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
+﻿using LogShippingService.FileHandling;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Hosting;
 using Serilog;
 using SerilogTimings;
 using System.Collections.Concurrent;
-using System.ComponentModel;
 using System.Data;
-using System.Globalization;
 using System.Numerics;
-using Microsoft.Extensions.Hosting;
-using System.Linq.Expressions;
-using System.Security.Permissions;
-using LogShippingService.FileHandling;
 
 namespace LogShippingService
 {
@@ -155,21 +149,22 @@ namespace LogShippingService
             Parallel.ForEach(dt.AsEnumerable(), new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads }, row =>
             {
                 if (stoppingToken.IsCancellationRequested || !Waiter.CanRestoreLogsNow) return;
-                var db = (string)row["Name"];
-                if (InitializingDBs.ContainsKey(db.ToLower()))
+                var targetDb = (string)row["Name"];
+                var sourceDb = DatabaseInitializerBase.GetSourceDatabaseName(targetDb);
+                if (InitializingDBs.ContainsKey(targetDb.ToLower()))
                 {
-                    Log.Information("Skipping log restores for {db} due to initialization", db);
+                    Log.Information("Skipping log restores for {targetDb} due to initialization", targetDb);
                     return;
                 }
                 var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
                 fromDate = fromDate.AddMinutes(Config.OffsetMins);
                 try
                 {
-                    ProcessDatabase(db, fromDate, stoppingToken);
+                    ProcessDatabase(sourceDb, targetDb, fromDate, stoppingToken);
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(ex, "Error processing database {db}", db);
+                    Log.Error(ex, "Error processing database {targetDb}", targetDb);
                 }
             });
             return Task.CompletedTask;
@@ -183,57 +178,63 @@ namespace LogShippingService
             return !isExcluded && isIncluded;
         }
 
-        private void ProcessDatabase(string db, DateTime fromDate, CancellationToken stoppingToken, int processCount = 1, bool reProcess = false)
+        private void ProcessDatabase(string sourceDb, string targetDb, DateTime fromDate, CancellationToken stoppingToken, int processCount = 1, bool reProcess = false)
         {
-            if (!IsIncludedDatabase(db))
+            var expectedTarget = DatabaseInitializerBase.GetDestinationDatabaseName(sourceDb);
+            if (!string.Equals(expectedTarget, targetDb, StringComparison.OrdinalIgnoreCase))
             {
-                Log.Debug("Skipping {db}. Database is excluded.", db);
+                Log.Debug("Skipping {targetDb}. Expected target to be {expectedName}", targetDb, expectedTarget);
                 return;
             }
-            var logFiles = GetFilesForDb(db, fromDate);
-            using (var op = Operation.Begin("Restore Logs for {DatabaseName}", db))
+            if (!IsIncludedDatabase(targetDb) && !IsIncludedDatabase(sourceDb))
+            {
+                Log.Debug("Skipping {targetDb}. Database is excluded.", targetDb);
+                return;
+            }
+            var logFiles = GetFilesForDb(sourceDb, fromDate);
+            using (var op = Operation.Begin("Restore Logs for {DatabaseName}", targetDb))
             {
                 try
                 {
-                    RestoreLogs(logFiles, db, reProcess, stoppingToken);
+                    RestoreLogs(logFiles, sourceDb, targetDb, reProcess, stoppingToken);
                     op.Complete();
                 }
                 catch (TimeoutException ex) when (ex.Message == "Max processing time exceeded")
                 {
                     Log.Warning(
-                        "Max processing time exceeded. Log processing will continue for {db} on the next iteration.",
-                        db);
+                        "Max processing time exceeded. Log processing will continue for {targetDb} on the next iteration.",
+                        targetDb);
                     op.SetException(ex);
                 }
                 catch (SqlException ex) when (ex.Number == 4305)
                 {
-                    HandleTooRecent(ex, db, fromDate, processCount, stoppingToken);
+                    HandleTooRecent(ex, sourceDb, targetDb, fromDate, processCount, stoppingToken);
                 }
                 catch (HeaderVerificationException ex) when (ex.VerificationStatus ==
                                                              BackupHeader.HeaderVerificationStatus.TooRecent)
                 {
-                    HandleTooRecent(ex, db, fromDate, processCount, stoppingToken);
+                    HandleTooRecent(ex, sourceDb, targetDb, fromDate, processCount, stoppingToken);
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(ex, "Error restoring logs for {db}", db);
+                    Log.Error(ex, "Error restoring logs for {targetDb}", targetDb);
                 }
             }
         }
 
-        private void HandleTooRecent(Exception ex, string db, DateTime fromDate, int processCount, CancellationToken stoppingToken)
+        private void HandleTooRecent(Exception ex, string sourceDb, string targetDb, DateTime fromDate, int processCount, CancellationToken stoppingToken)
         {
             switch (processCount)
             {
                 // Too recent
                 case 1:
                     Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 60min.");
-                    ProcessDatabase(db, fromDate.AddMinutes(-60), stoppingToken, processCount + 1, true);
+                    ProcessDatabase(sourceDb, targetDb, fromDate.AddMinutes(-60), stoppingToken, processCount + 1, true);
                     break;
 
                 case 2:
                     Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 1 day.");
-                    ProcessDatabase(db, fromDate.AddMinutes(-1440), stoppingToken, processCount + 1, true);
+                    ProcessDatabase(sourceDb, targetDb, fromDate.AddMinutes(-1440), stoppingToken, processCount + 1, true);
                     break;
 
                 default:
@@ -242,13 +243,13 @@ namespace LogShippingService
             }
         }
 
-        private static Task RestoreLogs(IEnumerable<BackupFile> logFiles, string db, bool reProcess, CancellationToken stoppingToken)
+        private static Task RestoreLogs(IEnumerable<BackupFile> logFiles, string sourceDb, string targetDb, bool reProcess, CancellationToken stoppingToken)
         {
             BigInteger? redoStartOrPreviousLastLSN = null;
             if (Config.CheckHeaders)
             {
-                redoStartOrPreviousLastLSN = DataHelper.GetRedoStartLSNForDB(db, Config.Destination);
-                Log.Debug("{db} Redo Start LSN: {RedoStartLSN}", db, redoStartOrPreviousLastLSN);
+                redoStartOrPreviousLastLSN = DataHelper.GetRedoStartLSNForDB(targetDb, Config.Destination);
+                Log.Debug("{targetDb} Redo Start LSN: {RedoStartLSN}", targetDb, redoStartOrPreviousLastLSN);
             }
 
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
@@ -258,20 +259,20 @@ namespace LogShippingService
             {
                 if (DateTime.Now > maxTime)
                 {
-                    RestoreWithStandby(db); // Return database to standby mode
+                    RestoreWithStandby(targetDb); // Return database to standby mode
                     // Stop processing logs if max processing time is exceeded. Prevents a single DatabaseName that has fallen behind from impacting other DBs
                     throw new TimeoutException("Max processing time exceeded");
                 }
                 if (stoppingToken.IsCancellationRequested)
                 {
-                    RestoreWithStandby(db); // Return database to standby mode
-                    Log.Information("Halt log restores for {db} due to stop request", db);
+                    RestoreWithStandby(targetDb); // Return database to standby mode
+                    Log.Information("Halt log restores for {targetDb} due to stop request", targetDb);
                     break;
                 }
                 if (!Waiter.CanRestoreLogsNow)
                 {
-                    RestoreWithStandby(db); // Return database to standby mode
-                    Log.Information("Halt log restores for {db} due to Hours configuration", db);
+                    RestoreWithStandby(targetDb); // Return database to standby mode
+                    Log.Information("Halt log restores for {targetDb} due to Hours configuration", targetDb);
                     break;
                 }
                 if (breakProcessingFlag)
@@ -281,7 +282,7 @@ namespace LogShippingService
 
                 var file = logBackup.FilePath.SqlSingleQuote();
                 var urlOrDisk = Config.DeviceType == BackupHeader.DeviceTypes.Disk ? "DISK" : "URL";
-                var sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY{stopAt}";
+                var sql = $"RESTORE LOG {targetDb.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY{stopAt}";
 
                 if (Config.CheckHeaders)
                 {
@@ -303,11 +304,11 @@ namespace LogShippingService
 
                     foreach (var header in headers)
                     {
-                        sql = $"RESTORE LOG {db.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY, FILE = {header.Position}{stopAt}";
-                        if (!string.Equals(header.DatabaseName, db, StringComparison.OrdinalIgnoreCase))
+                        sql = $"RESTORE LOG {targetDb.SqlQuote()} FROM {urlOrDisk} = {file} WITH NORECOVERY, FILE = {header.Position}{stopAt}";
+                        if (!string.Equals(header.DatabaseName, sourceDb, StringComparison.OrdinalIgnoreCase))
                         {
                             throw new HeaderVerificationException(
-                                $"Header verification failed for {logBackup}.  Database: {header.DatabaseName}. Expected a backup for {db}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
+                                $"Header verification failed for {logBackup}.  Database: {header.DatabaseName}. Expected a backup for {targetDb}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
                         }
 
                         if (Config.RestoreDelayMins > 0 && DateTime.Now.Subtract(header.BackupFinishDate).TotalMinutes < Config.RestoreDelayMins)
@@ -343,13 +344,13 @@ namespace LogShippingService
                             throw new HeaderVerificationException($"Header verification failed for {logBackup.FilePath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
                         }
 
-                        var completed = ProcessRestoreCommand(sql, db, file);
+                        var completed = ProcessRestoreCommand(sql, targetDb, file);
                         if (completed && Config.StopAt != DateTime.MinValue && header.BackupFinishDate >= Config.StopAt)
                         {
-                            Log.Information("StopAt target reached for {db}.  Last log: {logPath}.  Backup Finish Date: {BackupFinishDate}. StopAt: {StopAt}", db, logBackup.FilePath, header.BackupFinishDate, Config.StopAt);
+                            Log.Information("StopAt target reached for {targetDb}.  Last log: {logPath}.  Backup Finish Date: {BackupFinishDate}. StopAt: {StopAt}", targetDb, logBackup.FilePath, header.BackupFinishDate, Config.StopAt);
                             lock (locker) // Prevent future processing of this DB
                             {
-                                Config.ExcludedDatabases.Add(db); // Exclude this DB from future processing
+                                Config.ExcludedDatabases.Add(targetDb); // Exclude this DB from future processing
                             }
                             breakProcessingFlag = true;
                             break;
@@ -359,10 +360,10 @@ namespace LogShippingService
                 }
                 else
                 {
-                    ProcessRestoreCommand(sql, db, file);
+                    ProcessRestoreCommand(sql, targetDb, file);
                 }
             }
-            RestoreWithStandby(db);
+            RestoreWithStandby(targetDb);
             return Task.CompletedTask;
         }
 
@@ -393,7 +394,7 @@ namespace LogShippingService
             catch (SqlException ex) when (ex.Number == 4319)
             {
                 Log.Warning(ex,
-                    "A previous restore operation was interrupted for {db}.  Attempting to fix automatically with RESTART option", db);
+                    "A previous restore operation was interrupted for {targetDb}.  Attempting to fix automatically with RESTART option", db);
                 sql += ",RESTART";
                 try
                 {
@@ -418,7 +419,7 @@ namespace LogShippingService
                 sql += $"\tALTER DATABASE {db.SqlQuote()} SET SINGLE_USER WITH ROLLBACK AFTER {Config.KillUserConnectionsWithRollbackAfter}\n";
                 sql += $"\tRESTORE DATABASE {db.SqlQuote()} WITH NORECOVERY\n";
                 sql += "END\n";
-                Log.Warning("User connections to {db} are preventing restore operations.  Sessions will be killed after {seconds}. {sql}", db, Config.KillUserConnectionsWithRollbackAfter, sql);
+                Log.Warning("User connections to {targetDb} are preventing restore operations.  Sessions will be killed after {seconds}. {sql}", db, Config.KillUserConnectionsWithRollbackAfter, sql);
                 try
                 {
                     Execute(sql);
@@ -426,13 +427,13 @@ namespace LogShippingService
                 }
                 catch (Exception ex)
                 {
-                    Log.Error(ex, "Error killing user connections for {db}. {sql}", db, sql);
+                    Log.Error(ex, "Error killing user connections for {targetDb}. {sql}", db, sql);
                     return false;
                 }
             }
             else
             {
-                Log.Error("User connections to {db} are preventing restore operations. Consider enabling KillUserConnections in config");
+                Log.Error("User connections to {targetDb} are preventing restore operations. Consider enabling KillUserConnections in config");
                 return false;
             }
         }

@@ -10,32 +10,33 @@ namespace LogShippingService
     {
         protected abstract void PollForNewDBs(CancellationToken stoppingToken);
 
-        protected abstract void DoProcessDB(string db);
+        protected abstract void DoProcessDB(string sourceDb, string targetDb);
 
         private static Config Config => AppConfig.Config;
 
-        protected void ProcessDB(string db, CancellationToken stoppingToken)
+        protected void ProcessDB(string sourceDb, CancellationToken stoppingToken)
         {
-            if (!IsValidForInitialization(db)) return;
+            var targetDb = GetDestinationDatabaseName(sourceDb);
+            if (!IsValidForInitialization(sourceDb, targetDb)) return;
             if (stoppingToken.IsCancellationRequested) return;
             try
             {
-                if (LogShipping.InitializingDBs.TryAdd(db.ToLower(), db)) // To prevent log restores until initialization is complete
+                if (LogShipping.InitializingDBs.TryAdd(sourceDb.ToLower(), sourceDb)) // To prevent log restores until initialization is complete
                 {
-                    DoProcessDB(db);
+                    DoProcessDB(sourceDb, targetDb);
                 }
                 else
                 {
-                    Log.Error("{db} is already initializing", db);
+                    Log.Error("{sourceDb} is already initializing", sourceDb);
                 }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Error initializing new database from backup {db}", db);
+                Log.Error(ex, "Error initializing new database from backup {sourceDb}", sourceDb);
             }
             finally
             {
-                LogShipping.InitializingDBs.TryRemove(db.ToLower(), out _); // Log restores can start after restore operations have completed
+                LogShipping.InitializingDBs.TryRemove(sourceDb.ToLower(), out _); // Log restores can start after restore operations have completed
             }
         }
 
@@ -45,12 +46,13 @@ namespace LogShippingService
 
         public abstract bool IsValidated { get; }
 
-        public bool IsValidForInitialization(string db)
+        public bool IsValidForInitialization(string sourceDb, string targetDb)
         {
-            if (DestinationDBs == null || DestinationDBs.Exists(d => string.Equals(d.Name, db, StringComparison.CurrentCultureIgnoreCase))) return false;
+            if (DestinationDBs == null || DestinationDBs.Exists(d => string.Equals(d.Name, targetDb, StringComparison.CurrentCultureIgnoreCase))) return false;
             var systemDbs = new[] { "master", "model", "msdb" };
-            if (systemDbs.Any(s => s.Equals(db, StringComparison.OrdinalIgnoreCase))) return false;
-            return LogShipping.IsIncludedDatabase(db);
+            if (systemDbs.Any(s => s.Equals(sourceDb, StringComparison.OrdinalIgnoreCase))) return false;
+            if (systemDbs.Any(s => s.Equals(targetDb, StringComparison.OrdinalIgnoreCase))) return false;
+            return LogShipping.IsIncludedDatabase(sourceDb) || LogShipping.IsIncludedDatabase(targetDb);
         }
 
         public async Task RunPollForNewDBs(CancellationToken stoppingToken)
@@ -122,7 +124,7 @@ namespace LogShippingService
             await Waiter.WaitUntilActiveHours(stoppingToken);
         }
 
-        protected static void ProcessRestore(string db, List<string> fullFiles, List<string> diffFiles, BackupHeader.DeviceTypes deviceType)
+        protected static void ProcessRestore(string sourceDb, string targetDb, List<string> fullFiles, List<string> diffFiles, BackupHeader.DeviceTypes deviceType)
         {
             var fullHeader = BackupHeader.GetHeaders(fullFiles, Config.Destination, deviceType);
 
@@ -136,14 +138,14 @@ namespace LogShippingService
                 Log.Error("Error reading backup header. 0 rows returned.");
                 return;
             }
-            else if (!string.Equals(fullHeader[0].DatabaseName, db, StringComparison.CurrentCultureIgnoreCase))
+            else if (!string.Equals(fullHeader[0].DatabaseName, sourceDb, StringComparison.CurrentCultureIgnoreCase))
             {
-                Log.Error("Backup is for {db}.  Expected {expectedDB}. {fullFiles}", fullHeader[0].DatabaseName, db, fullFiles);
+                Log.Error("Backup is for {sourceDb}.  Expected {expectedDB}. {fullFiles}", fullHeader[0].DatabaseName, sourceDb, fullFiles);
                 return;
             }
             else if (fullHeader[0].RecoveryModel == "SIMPLE" && !Config.InitializeSimple)
             {
-                Log.Warning("Skipping initialization of {db} due to SIMPLE recovery model. InitializeSimple can be set to alter this behaviour for disaster recovery purposes.", db);
+                Log.Warning("Skipping initialization of {sourceDb} due to SIMPLE recovery model. InitializeSimple can be set to alter this behaviour for disaster recovery purposes.", sourceDb);
                 return;
             }
             else if (fullHeader[0].BackupType is not (BackupHeader.BackupTypes.DatabaseFull or BackupHeader.BackupTypes.Partial))
@@ -152,12 +154,12 @@ namespace LogShippingService
             }
             if (fullHeader[0].BackupType == BackupHeader.BackupTypes.Partial)
             {
-                Log.Warning("Warning. Initializing {db} from a PARTIAL backup. Additional steps might be required to restore READONLY filegroups.  Check sys.master_files to ensure no files are in RECOVERY_PENDING state.", db);
+                Log.Warning("Warning. Initializing {sourceDb} from a PARTIAL backup. Additional steps might be required to restore READONLY filegroups.  Check sys.master_files to ensure no files are in RECOVERY_PENDING state.", sourceDb);
             }
 
             var moves = DataHelper.GetFileMoves(fullFiles, deviceType, Config.Destination, Config.MoveDataFolder, Config.MoveLogFolder,
-                Config.MoveFileStreamFolder);
-            var restoreScript = DataHelper.GetRestoreDbScript(fullFiles, db, deviceType, true, moves);
+                Config.MoveFileStreamFolder, sourceDb, targetDb);
+            var restoreScript = DataHelper.GetRestoreDbScript(fullFiles, targetDb, deviceType, true, moves);
             // Restore FULL
             DataHelper.ExecuteWithTiming(restoreScript, Config.Destination);
 
@@ -170,7 +172,7 @@ namespace LogShippingService
             if (IsDiffApplicable(fullHeader, diffHeader))
             {
                 // Restore DIFF is applicable
-                restoreScript = DataHelper.GetRestoreDbScript(diffFiles, db, deviceType, false);
+                restoreScript = DataHelper.GetRestoreDbScript(diffFiles, targetDb, deviceType, false);
                 DataHelper.ExecuteWithTiming(restoreScript, Config.Destination);
             }
         }
@@ -199,7 +201,7 @@ namespace LogShippingService
 
                 if (header.BackupType != backupType)
                 {
-                    Log.Warning("Skipping {file} for {db}.  Backup type is {BackupType}.  Expected {ExpectedBackupType}", file.FilePath, db, header.BackupType, backupType);
+                    Log.Warning("Skipping {file} for {sourceDb}.  Backup type is {BackupType}.  Expected {ExpectedBackupType}", file.FilePath, db, header.BackupType, backupType);
                     return false;
                 }
                 var thisGUID = header.BackupSetGUID;
@@ -218,6 +220,25 @@ namespace LogShippingService
                 Log.Warning($"Backup file contains multiple backups and will be skipped. {file.FilePath}");
                 return false;
             }
+        }
+
+        public static string GetDestinationDatabaseName(string sourceDB)
+        {
+            return Config.RestoreDatabaseNamePrefix + sourceDB + Config.RestoreDatabaseNameSuffix;
+        }
+
+        public static string GetSourceDatabaseName(string destinationDB)
+        {
+            var prefix = Config.RestoreDatabaseNamePrefix ?? string.Empty;
+            var suffix = Config.RestoreDatabaseNameSuffix ?? string.Empty;
+
+            // remove the prefix
+            var sourceDB = destinationDB.StartsWith(prefix) ? destinationDB[prefix.Length..] : destinationDB;
+
+            // remove the suffix
+            sourceDB = sourceDB.EndsWith(suffix) ? sourceDB[..^suffix.Length] : sourceDB;
+
+            return sourceDB;
         }
     }
 }

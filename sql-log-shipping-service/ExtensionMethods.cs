@@ -41,5 +41,10 @@
         {
             return backupFiles.Select(f => f.FilePath).ToList();
         }
+
+        public static string RemoveInvalidFileNameChars(this string filename)
+        {
+            return string.Concat(filename.Split(Path.GetInvalidFileNameChars()));
+        }
     }
 }

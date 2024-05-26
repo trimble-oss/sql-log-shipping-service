@@ -45,11 +45,11 @@ namespace LogShippingService
                 });
         }
 
-        protected override void DoProcessDB(string db)
+        protected override void DoProcessDB(string sourceDb, string targetDb)
         {
-            var fullFolder = Config.FullFilePath?.Replace(Config.DatabaseToken, db);
-            var diffFolder = Config.DiffFilePath?.Replace(Config.DatabaseToken, db);
-            var readOnlyFolder = Config.ReadOnlyFilePath?.Replace(Config.DatabaseToken, db);
+            var fullFolder = Config.FullFilePath?.Replace(Config.DatabaseToken, sourceDb);
+            var diffFolder = Config.DiffFilePath?.Replace(Config.DatabaseToken, sourceDb);
+            var readOnlyFolder = Config.ReadOnlyFilePath?.Replace(Config.DatabaseToken, sourceDb);
             if (fullFolder == null) { return; }
 
             var isPartial = false;
@@ -58,14 +58,14 @@ namespace LogShippingService
             string? readOnlySQL = null;
             try
             {
-                fullFiles = GetFilesForLastBackup(fullFolder, db, BackupHeader.BackupTypes.DatabaseFull);
+                fullFiles = GetFilesForLastBackup(fullFolder, sourceDb, BackupHeader.BackupTypes.DatabaseFull);
                 if (fullFiles.Count == 0 && (!string.IsNullOrEmpty(readOnlyFolder) || Config.RecoverPartialBackupWithoutReadOnly))
                 {
-                    Log.Information("No full backups found for {db}.  Checking for partial backups.", db);
-                    fullFiles = GetFilesForLastBackup(fullFolder, db, BackupHeader.BackupTypes.Partial);
+                    Log.Information("No full backups found for {sourceDb}.  Checking for partial backups.", sourceDb);
+                    fullFiles = GetFilesForLastBackup(fullFolder, sourceDb, BackupHeader.BackupTypes.Partial);
                     if (fullFiles.Count == 0)
                     {
-                        throw new Exception($"No backup files for {db} found in {fullFolder}");
+                        throw new Exception($"No backup files for {sourceDb} found in {fullFolder}");
                     }
                     else
                     {
@@ -73,32 +73,32 @@ namespace LogShippingService
                         var files = fullFiles[0].BackupFileList;
                         if (files.All(f => f.IsPresent)) // We did a partial backup without any readonly filegroups
                         {
-                            Log.Warning("Partial backup was used for {db} but backup includes all files.", db);
+                            Log.Warning("Partial backup was used for {sourceDb} but backup includes all files.", sourceDb);
                         }
                         else if (!string.IsNullOrEmpty(readOnlyFolder))
                         {
-                            readOnlySQL = GetReadOnlyRestoreCommand(fullFiles, readOnlyFolder, db, DeviceType);
+                            readOnlySQL = GetReadOnlyRestoreCommand(fullFiles, readOnlyFolder, sourceDb, DeviceType);
                             Log.Debug("Restore command for readonly: {ReadOnlySQL}", readOnlySQL);
                             if (string.IsNullOrEmpty(readOnlySQL) & !Config.RecoverPartialBackupWithoutReadOnly)
                             {
-                                throw new Exception($"Unable to find readonly backups for {db}.  To recover databases anyway use 'RecoverPartialBackupWithoutReadOnly'");
+                                throw new Exception($"Unable to find readonly backups for {sourceDb}.  To recover databases anyway use 'RecoverPartialBackupWithoutReadOnly'");
                             }
                             else if (string.IsNullOrEmpty(readOnlySQL))
                             {
-                                Log.Warning("Unable to find readonly backups for {db}.  Restore of partial backup will proceed.  Restore READONLY filegroups manually.", db);
+                                Log.Warning("Unable to find readonly backups for {sourceDb}.  Restore of partial backup will proceed.  Restore READONLY filegroups manually.", sourceDb);
                             }
                         }
-                        Log.Warning("Restoring {db} from PARTIAL backup.", db);
+                        Log.Warning("Restoring {sourceDb} from PARTIAL backup.", sourceDb);
                     }
                 }
                 else if (fullFiles.Count == 0)
                 {
-                    throw new Exception($"No full backups found for {db}");
+                    throw new Exception($"No full backups found for {sourceDb}");
                 }
             }
             catch (Exception ex)
             {
-                Log.Error(ex, "Error getting files for last FULL backup for {db} in {fullFolder}", db, fullFolder);
+                Log.Error(ex, "Error getting files for last FULL backup for {sourceDb} in {fullFolder}", sourceDb, fullFolder);
                 return;
             }
 
@@ -106,10 +106,10 @@ namespace LogShippingService
             {
                 if (!string.IsNullOrEmpty(diffFolder))
                 {
-                    diffFiles = GetFilesForLastBackup(diffFolder, db, isPartial ? BackupHeader.BackupTypes.PartialDiff : BackupHeader.BackupTypes.DatabaseDiff);
+                    diffFiles = GetFilesForLastBackup(diffFolder, sourceDb, isPartial ? BackupHeader.BackupTypes.PartialDiff : BackupHeader.BackupTypes.DatabaseDiff);
                     if (diffFiles.Count == 0)
                     {
-                        Log.Warning("No DIFF backups files for {db} found in {diffFolder}", db, diffFolder);
+                        Log.Warning("No DIFF backups files for {sourceDb} found in {diffFolder}", sourceDb, diffFolder);
                     }
                 }
                 else
@@ -119,13 +119,13 @@ namespace LogShippingService
             }
             catch (Exception ex)
             {
-                Log.Warning(ex, "Error getting files for last DIFF backup for {db} in {diffFolder}. Restore will continue with FULL backup", db, diffFolder);
+                Log.Warning(ex, "Error getting files for last DIFF backup for {sourceDb} in {diffFolder}. Restore will continue with FULL backup", sourceDb, diffFolder);
             }
 
-            ProcessRestore(db, fullFiles.GetFileList(), diffFiles.GetFileList(), DeviceType);
+            ProcessRestore(sourceDb, targetDb, fullFiles.GetFileList(), diffFiles.GetFileList(), DeviceType);
             if (!string.IsNullOrEmpty(readOnlySQL))
             {
-                Log.Information("Restoring READONLY backups for {db}", db);
+                Log.Information("Restoring READONLY backups for {sourceDb}", sourceDb);
                 DataHelper.ExecuteWithTiming(readOnlySQL, Config.Destination);
             }
         }
@@ -141,7 +141,7 @@ namespace LogShippingService
                 Log.Warning("All files are present in the backup.  Nothing to restore");
                 return string.Empty;
             }
-            Log.Information("Looking for readonly backups for {db}.  Missing files: {files}", db, missing.Select(f => f.LogicalName).ToList());
+            Log.Information("Looking for readonly backups for {sourceDb}.  Missing files: {files}", db, missing.Select(f => f.LogicalName).ToList());
             var familyGUID = fullFiles[0].FirstHeader.FamilyGUID;
 
             ReadOnlyBackupSet? backupSet = null;
@@ -175,7 +175,7 @@ namespace LogShippingService
 
             if (missing.Count != 0)
             {
-                Log.Error("File restore error for {db}.  Missing backup for files {files}", db, missing.Select(f => f.LogicalName).ToList());
+                Log.Error("File restore error for {sourceDb}.  Missing backup for files {files}", db, missing.Select(f => f.LogicalName).ToList());
                 return string.Empty;
             }
             StringBuilder builder = new();
