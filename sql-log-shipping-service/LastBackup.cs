@@ -37,17 +37,18 @@ namespace LogShippingService
             }
         }
 
-        public void Restore()
+        public void Restore(string? targetDb = null)
         {
+            targetDb ??= DatabaseName;
             Dictionary<string, string>? moves = null;
             if (BackupType == BackupHeader.BackupTypes.DatabaseFull)
             {
                 moves = DataHelper.GetFileMoves(FileList, DeviceType, Config.Destination,
                     Config.MoveDataFolder,
-                    Config.MoveLogFolder, Config.MoveFileStreamFolder);
+                    Config.MoveLogFolder, Config.MoveFileStreamFolder, DatabaseName, targetDb);
             }
 
-            var sql = GetRestoreDbScript(moves);
+            var sql = GetRestoreDbScript(moves, targetDb);
             DataHelper.ExecuteWithTiming(sql, Config.Destination);
         }
 
@@ -83,7 +84,7 @@ namespace LogShippingService
 
         public string GetFileListOnlyScript() => DataHelper.GetFileListOnlyScript(FileList, DeviceType);
 
-        public string GetRestoreDbScript(Dictionary<string, string>? moves) => DataHelper.GetRestoreDbScript(FileList, DatabaseName, DeviceType, BackupType == BackupHeader.BackupTypes.DatabaseFull, moves);
+        public string GetRestoreDbScript(Dictionary<string, string>? moves, string targetDb) => DataHelper.GetRestoreDbScript(FileList, targetDb, DeviceType, BackupType == BackupHeader.BackupTypes.DatabaseFull, moves);
 
         internal static DataTable GetFilesForLastBackup(string db, char backupType, string connectionString)
         {

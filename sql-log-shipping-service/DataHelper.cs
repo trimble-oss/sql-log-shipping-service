@@ -85,31 +85,40 @@ namespace LogShippingService
             return builder.ToString();
         }
 
-        public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type, string connectionString, string? dataFolder, string? logFolder, string? fileStreamFolder)
+        public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type, string connectionString, string? dataFolder, string? logFolder, string? fileStreamFolder, string sourceDb, string targetDb)
         {
             Dictionary<string, string> fileMoves = new();
-            if (string.IsNullOrEmpty(dataFolder) && string.IsNullOrEmpty(logFolder) && string.IsNullOrEmpty(fileStreamFolder)) { return fileMoves; }
+            // Check if we need to move the files
+            if (string.IsNullOrEmpty(dataFolder) && string.IsNullOrEmpty(logFolder) && string.IsNullOrEmpty(fileStreamFolder) && string.Equals(sourceDb, targetDb, StringComparison.OrdinalIgnoreCase)) { return fileMoves; }
             var list = BackupFileListRow.GetFileList(files, connectionString, type);
             foreach (var file in list)
             {
+                var fileName = file.FileName;
                 var movePath = file.Type switch
                 {
                     'L' => logFolder,
                     'S' => fileStreamFolder,
                     _ => dataFolder
                 };
-                if (!string.IsNullOrEmpty(movePath))
+                // Create a new filename if the target database is different from the source database name.  This should avoid filename conflicts
+                if (!string.Equals(sourceDb, targetDb, StringComparison.OrdinalIgnoreCase))
                 {
-                    fileMoves.Add(file.LogicalName, Path.Combine(movePath, file.FileName));
+                    fileName = (targetDb + "_" + file.LogicalName + Path.GetExtension(file.PhysicalName)).RemoveInvalidFileNameChars();
                 }
+                // Set movePath to the source folder if we don't have a location specified
+                if (string.IsNullOrEmpty(movePath))
+                {
+                    movePath = Path.GetDirectoryName(file.PhysicalName) ?? throw new InvalidOperationException();
+                }
+                fileMoves.Add(file.LogicalName, Path.Combine(movePath, fileName));
             }
             return fileMoves;
         }
 
-        public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type)
+        public static Dictionary<string, string> GetFileMoves(List<string> files, BackupHeader.DeviceTypes type, string sourceDb, string targetDb)
         {
             return GetFileMoves(files, type, Config.Destination, Config.MoveDataFolder, Config.MoveLogFolder,
-                Config.MoveFileStreamFolder);
+                Config.MoveFileStreamFolder, sourceDb, targetDb);
         }
 
         public static string GetFromDisk(List<string> files, BackupHeader.DeviceTypes type)

@@ -120,5 +120,11 @@ namespace LogShippingService
 
         [Option("Run", Required = false, HelpText = "Run without saving changes to the config")]
         public bool Run { get; set; }
+
+        [Option("RestoreDatabaseNamePrefix", Required = false, HelpText = "Change the name of the database on the destination by adding a prefix")]
+        public string? RestoreDatabaseNamePrefix { get; set; }
+
+        [Option("RestoreDatabaseNameSuffix", Required = false, HelpText = "Change the name of the database on the destination by adding a suffix")]
+        public string? RestoreDatabaseNameSuffix { get; set; }
     }
 }
