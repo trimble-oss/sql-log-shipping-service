@@ -82,7 +82,7 @@ jobs:
 
       - name: Run Pester Tests
         run: |     
-          Install-Module Pester -Force
+          Install-Module Pester -Force -SkipPublisherCheck
           Import-Module Pester -PassThru
           Invoke-Pester -Output Detailed test\CI_Workflow.Tests.ps1
 
