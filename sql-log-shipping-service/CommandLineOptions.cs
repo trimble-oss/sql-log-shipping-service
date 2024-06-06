@@ -126,5 +126,11 @@ namespace LogShippingService
 
         [Option("RestoreDatabaseNameSuffix", Required = false, HelpText = "Change the name of the database on the destination by adding a suffix")]
         public string? RestoreDatabaseNameSuffix { get; set; }
+
+        [Option("OldName", Required = false, HelpText = "Option to restore a database with a new name. e.g. --OldName OriginalName --NewName DestinationName.  Omit --NewName to remove a mapping. Repeat as required for multiple databases. Has priority over RestoreDatabaseNamePrefix/RestoreDatabaseNameSuffix")]
+        public string? OldName { get; set; }
+
+        [Option("NewName", Required = false, HelpText = "Option to restore a database with a new name. e.g. --OldName OriginalName --NewName DestinationName.  Omit --NewName to remove a mapping. Repeat as required for multiple databases. Has priority over RestoreDatabaseNamePrefix/RestoreDatabaseNameSuffix")]
+        public string? NewName { get; set; }
     }
 }

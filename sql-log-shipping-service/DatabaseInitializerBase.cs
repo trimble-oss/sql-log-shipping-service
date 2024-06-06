@@ -224,11 +224,19 @@ namespace LogShippingService
 
         public static string GetDestinationDatabaseName(string sourceDB)
         {
+            if (Config.SourceToDestinationMapping.TryGetValue(sourceDB.ToLower(), out var targetDB))
+            {
+                return targetDB;
+            }
             return Config.RestoreDatabaseNamePrefix + sourceDB + Config.RestoreDatabaseNameSuffix;
         }
 
         public static string GetSourceDatabaseName(string destinationDB)
         {
+            if (Config.DestinationToSourceMapping.TryGetValue(destinationDB.ToLower(), out var _sourceDB))
+            {
+                return _sourceDB;
+            }
             var prefix = Config.RestoreDatabaseNamePrefix ?? string.Empty;
             var suffix = Config.RestoreDatabaseNameSuffix ?? string.Empty;
 

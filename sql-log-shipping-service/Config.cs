@@ -12,6 +12,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using CommandLine;
 using Microsoft.Extensions.Azure;
+using Microsoft.Extensions.Options;
 using static System.Collections.Specialized.BitVector32;
 using static LogShippingService.FileHandling.FileHandler;
 
@@ -402,6 +403,18 @@ namespace LogShippingService
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         public string? RestoreDatabaseNameSuffix { get; set; }
 
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public Dictionary<string, string>? DatabaseNameMapping { get; set; }
+
+        [JsonIgnore]
+        public Dictionary<string, string> SourceToDestinationMapping => _sourceToDestinationMapping ??= DatabaseNameMapping?.ToDictionary(kvp => kvp.Key.ToLower(), kvp => kvp.Value) ?? new();
+
+        private Dictionary<string, string>? _destinationToSourceMapping;
+        private Dictionary<string, string>? _sourceToDestinationMapping;
+
+        [JsonIgnore]
+        public Dictionary<string, string> DestinationToSourceMapping => _destinationToSourceMapping ??= DatabaseNameMapping?.ToDictionary(kvp => kvp.Value.ToLower(), kvp => kvp.Key) ?? new();
+
         #endregion Initialization
 
         #region OtherOptions
@@ -730,12 +743,49 @@ namespace LogShippingService
 
                             if (opts.RestoreDatabaseNamePrefix != null)
                             {
-                                RestoreDatabaseNamePrefix = opts.RestoreDatabaseNamePrefix;
+                                RestoreDatabaseNamePrefix = opts.RestoreDatabaseNamePrefix == string.Empty ? null : opts.RestoreDatabaseNamePrefix;
                             }
 
                             if (opts.RestoreDatabaseNameSuffix != null)
                             {
-                                RestoreDatabaseNameSuffix = opts.RestoreDatabaseNameSuffix;
+                                RestoreDatabaseNameSuffix = opts.RestoreDatabaseNameSuffix == string.Empty ? null : opts.RestoreDatabaseNameSuffix;
+                            }
+                            if (opts.OldName != null)
+                            {
+                                DatabaseNameMapping ??= new Dictionary<string, string>();
+
+                                // Remove existing key with a case insensitive comparison
+                                DatabaseNameMapping = DatabaseNameMapping.Where(kvp => !string.Equals(kvp.Key, opts.OldName, StringComparison.OrdinalIgnoreCase)).ToDictionary();
+
+                                if (opts.NewName != null)
+                                {
+                                    // Check if value already exists with a case insensitive comparison
+                                    if (DatabaseNameMapping.Any(kvp => string.Equals(kvp.Value, opts.NewName, StringComparison.OrdinalIgnoreCase)))
+                                    {
+                                        Log.Error("A mapping already exists for {NewName}", opts.NewName);
+                                        Console.WriteLine(JsonConvert.SerializeObject(DatabaseNameMapping, Formatting.Indented));
+                                        errorCount++;
+                                    }
+                                    else
+                                    {
+                                        Log.Information("Database {OldName} will be restored as {NewName}",
+                                            opts.OldName, opts.NewName);
+                                        DatabaseNameMapping.Add(opts.OldName, opts.NewName);
+                                    }
+                                }
+                                else
+                                {
+                                    Log.Information("DatabaseNameMapping removed for {OldName}", opts.OldName);
+                                }
+                                if (DatabaseNameMapping.Count == 0)
+                                {
+                                    DatabaseNameMapping = null;
+                                }
+                            }
+                            else if (opts.NewName != null)
+                            {
+                                Log.Error("NewName specified without OldName");
+                                errorCount++;
                             }
                             run = opts.Run;
                         }
