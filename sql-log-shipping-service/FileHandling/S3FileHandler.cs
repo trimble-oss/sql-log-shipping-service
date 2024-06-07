@@ -61,13 +61,13 @@ namespace LogShippingService.FileHandling
             {
                 response = await s3Client.ListObjectsV2Async(request);
                 var matchingFiles = response.S3Objects
-                    .Where(s3Object => IsFileNameMatchingPattern(s3Object.Key, pattern) && s3Object.LastModified >= MaxAge)
-                    .Select(s3Object => new BackupFile($"s3://{s3Uri.Uri.Host}/{s3Object.Key}", BackupHeader.DeviceTypes.Url, s3Object.LastModified));
+                    .Where(s3Object => IsFileNameMatchingPattern(s3Object.Key, pattern) && s3Object.LastModified.ToUniversalTime() >= MaxAge)
+                    .Select(s3Object => new BackupFile($"s3://{s3Uri.Uri.Host}/{s3Object.Key}", BackupHeader.DeviceTypes.Url, s3Object.LastModified.ToUniversalTime()));
 
                 files.AddRange(matchingFiles);
                 request.ContinuationToken = response.NextContinuationToken;
             } while (response.IsTruncated);
-
+            
             return files;
         }
 
