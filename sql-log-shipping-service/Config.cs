@@ -812,8 +812,16 @@ namespace LogShippingService
             }
             else if (result.Errors.Any(ex => ex is HelpRequestedError))
             {
-                Console.WriteLine("Current Config:");
-                Console.WriteLine(File.ReadAllText(ConfigFile));
+                if (File.Exists(ConfigFile))
+                {
+                    Console.WriteLine("Current Config:");
+                    Console.WriteLine(File.ReadAllText(ConfigFile));
+                }
+                else
+                {
+                    Console.WriteLine("No config file found.  Use the command line options to configure the service.");
+                }
+
                 Environment.Exit(0);
             }
             else if (result.Errors.Any(ex => ex is VersionRequestedError))
