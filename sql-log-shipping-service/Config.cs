@@ -102,7 +102,14 @@ namespace LogShippingService
             }
             else if (EncryptionHelper.IsEncrypted(value))
             {
-                _sasToken = EncryptionHelper.DecryptWithMachineKey(value);
+                try
+                {
+                    _sasToken = EncryptionHelper.DecryptWithMachineKey(value);
+                }
+                catch (Exception ex)
+                {
+                    Log.Error(ex, "Error decrypting SAS token.  If the config file has been copied from another computer,please input a new SAS token from the portal");
+                }
             }
             else
             {
