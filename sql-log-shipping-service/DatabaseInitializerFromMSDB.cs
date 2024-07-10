@@ -67,19 +67,20 @@ namespace LogShippingService
         protected override void DoProcessDB(string sourceDb, string targetDb)
         {
             if (Config.SourceConnectionString == null) return;
-            Log.Information("Initializing new database: {sourceDb}", sourceDb);
+            var dbIdentifier = GetDatabaseIdentifier(sourceDb, targetDb);
+            Log.Information("Initializing new database: {db}", dbIdentifier);
             var lastFull = new LastBackup(sourceDb, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseFull);
             var lastDiff = new LastBackup(sourceDb, Config.SourceConnectionString, BackupHeader.BackupTypes.DatabaseDiff);
             ReplacePaths(ref lastFull); // Replace paths if necessary.  e.g. Convert local path to UNC path
             ReplacePaths(ref lastDiff); // Replace paths if necessary.  e.g. Convert local path to UNC path
             if (lastFull.FileList.Count == 0)
             {
-                Log.Error("No backups available to initialize {sourceDb}", sourceDb);
+                Log.Error("No backups available to initialize {db}", dbIdentifier);
                 return;
             }
 
-            Log.Debug("Last full for {sourceDb}: {lastFull}", sourceDb, lastFull.BackupFinishDate);
-            Log.Debug("Last diff for {sourceDb}: {lastDiff}", sourceDb, lastDiff.BackupFinishDate);
+            Log.Debug("Last full for {db}: {lastFull}", dbIdentifier, lastFull.BackupFinishDate);
+            Log.Debug("Last diff for {db}: {lastDiff}", dbIdentifier, lastDiff.BackupFinishDate);
 
             var fullHeader = lastFull.GetHeader(Config.Destination);
 

@@ -154,7 +154,7 @@ namespace LogShippingService
             }
             if (fullHeader[0].BackupType == BackupHeader.BackupTypes.Partial)
             {
-                Log.Warning("Warning. Initializing {sourceDb} from a PARTIAL backup. Additional steps might be required to restore READONLY filegroups.  Check sys.master_files to ensure no files are in RECOVERY_PENDING state.", sourceDb);
+                Log.Warning("Warning. Initializing {targetDb} from a PARTIAL backup. Additional steps might be required to restore READONLY filegroups.  Check sys.master_files to ensure no files are in RECOVERY_PENDING state.", targetDb);
             }
 
             var moves = DataHelper.GetFileMoves(fullFiles, deviceType, Config.Destination, Config.MoveDataFolder, Config.MoveLogFolder,
@@ -248,5 +248,8 @@ namespace LogShippingService
 
             return sourceDB;
         }
+
+        public static string GetDatabaseIdentifier(string sourceDb, string targetDb) =>
+            string.Equals(sourceDb, targetDb, StringComparison.OrdinalIgnoreCase) ? targetDb : $"{targetDb} [From: {sourceDb}]";
     }
 }
