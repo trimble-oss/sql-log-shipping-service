@@ -255,6 +255,7 @@ namespace LogShippingService
             var maxTime = DateTime.Now.AddMinutes(Config.MaxProcessingTimeMins);
             bool breakProcessingFlag = false;
             var stopAt = Config.StopAt > DateTime.MinValue && Config.StopAt < DateTime.MaxValue ? ", STOPAT=" + Config.StopAt.ToString("yyyy-MM-ddTHH:mm:ss.fff").SqlSingleQuote() : "";
+            var earlierLogFound = false;
             foreach (var logBackup in logFiles)
             {
                 if (DateTime.Now > maxTime)
@@ -336,11 +337,20 @@ namespace LogShippingService
                         }
                         else if (header.FirstLSN < redoStartOrPreviousLastLSN)
                         {
+                            earlierLogFound = true;
                             Log.Information("Skipping {logPath}.  A later LSN is required: {RequiredLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
                             continue;
                         }
                         else if (header.FirstLSN > redoStartOrPreviousLastLSN)
                         {
+                            if (earlierLogFound && reProcess) 
+                            {
+                                // The current log is too recent.  We previously adjusted the search date looking for an earlier log.  Now we have found log files that are too early to apply, then this log that is too recent
+                                // The log chain appears to be broken, but log an error and continue processing in case the file has a later modified date than expected.
+                                Log.Error("Header verification failed for {FilePath}. An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}. NOTE: We previously found a log that was too early to apply.  Log chain might be broken, requiring manual intervention. Continuing to check log files just in case the file has a later modified date than expected.",
+                                    logBackup.FilePath,redoStartOrPreviousLastLSN,header.FirstLSN,header.LastLSN);
+                                continue;
+                            }
                             throw new HeaderVerificationException($"Header verification failed for {logBackup.FilePath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
                         }
 
