@@ -1,15 +1,7 @@
-﻿using System.Runtime.CompilerServices;
-using CommandLine;
-using Microsoft.Extensions.Configuration;
+﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using Serilog;
-using static System.Collections.Specialized.BitVector32;
-using System.Windows.Forms;
-using Microsoft.Data.SqlClient;
-using System.Linq;
 
 namespace LogShippingService
 {
