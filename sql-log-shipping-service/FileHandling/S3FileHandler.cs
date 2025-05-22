@@ -60,13 +60,21 @@ namespace LogShippingService.FileHandling
             do
             {
                 response = await s3Client.ListObjectsV2Async(request);
-                var matchingFiles = response.S3Objects
-                    .Where(s3Object => IsFileNameMatchingPattern(s3Object.Key, pattern) && s3Object.LastModified.ToUniversalTime() >= MaxAge)
-                    .Select(s3Object => new BackupFile($"s3://{s3Uri.Uri.Host}/{s3Object.Key}", BackupHeader.DeviceTypes.Url, s3Object.LastModified.ToUniversalTime()));
+                if (response.S3Objects is { Count: > 0 })
+                {
+                    var matchingFiles = response.S3Objects
+                        .Where(s3Object =>
+                            IsFileNameMatchingPattern(s3Object.Key, pattern) &&
+                            s3Object.LastModified?.ToUniversalTime() >= MaxAge)
+                        .Select(s3Object => new BackupFile($"s3://{s3Uri.Uri.Host}/{s3Object.Key}",
+                            BackupHeader.DeviceTypes.Url,
+                            s3Object.LastModified?.ToUniversalTime() ?? DateTime.MinValue));
 
-                files.AddRange(matchingFiles);
+                    files.AddRange(matchingFiles);
+                }
+
                 request.ContinuationToken = response.NextContinuationToken;
-            } while (response.IsTruncated);
+            } while (response.IsTruncated==true);
             
             return files;
         }
@@ -121,9 +129,12 @@ namespace LogShippingService.FileHandling
             {
                 response = await s3Client.ListObjectsV2Async(request);
                 // Add all common prefixes (folders) to the list
-                folders.AddRange(response.CommonPrefixes.Select(f => Path.GetFileName(f.TrimEnd('/'))));
+                if (response.CommonPrefixes != null)
+                {
+                    folders.AddRange(response.CommonPrefixes.Select(f => Path.GetFileName(f.TrimEnd('/'))));
+                }
                 request.ContinuationToken = response.NextContinuationToken;
-            } while (response.IsTruncated);
+            } while (response.IsTruncated == true);
 
             return folders;
         }
