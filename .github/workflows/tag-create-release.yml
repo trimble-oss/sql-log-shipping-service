@@ -32,10 +32,10 @@ jobs:
       - name: Zip
         shell: powershell
         run: | 
-          $zipPath = "LogShippingService_${{steps.GetVersion.outputs.BUILD_NUMBER}}.zip"
+          $zipPath = "LogShippingService_${{steps.GetVersion.outputs.BUILD_NUMBER}}-unsigned.zip"
           Compress-Archive -Path "Build\*" -DestinationPath $zipPath
 
       - name: Publish - GitHub CLI
-        run: gh release create ${{steps.GetVersion.outputs.BUILD_NUMBER}} "LogShippingService_${{steps.GetVersion.outputs.BUILD_NUMBER}}.zip" --generate-notes --draft
+        run: gh release create ${{steps.GetVersion.outputs.BUILD_NUMBER}} "LogShippingService_${{steps.GetVersion.outputs.BUILD_NUMBER}}-unsigned.zip" --generate-notes --draft
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
