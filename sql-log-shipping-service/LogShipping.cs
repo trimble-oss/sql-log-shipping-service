@@ -228,12 +228,12 @@ namespace LogShippingService
             {
                 // Too recent
                 case 1:
-                    Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 60min.");
+                    Log.Warning(ex, "The log file is too recent to apply.  Adjusting fromDate by 60min.");
                     ProcessDatabase(sourceDb, targetDb, fromDate.AddMinutes(-60), stoppingToken, processCount + 1, true);
                     break;
 
                 case 2:
-                    Log.Warning(ex, "Log file to recent to apply.  Adjusting fromDate by 1 day.");
+                    Log.Warning(ex, "The log file is too recent to apply.  Adjusting fromDate by 1 day.");
                     ProcessDatabase(sourceDb, targetDb, fromDate.AddMinutes(-1440), stoppingToken, processCount + 1, true);
                     break;
 
