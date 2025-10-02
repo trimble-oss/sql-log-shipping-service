@@ -156,7 +156,7 @@ namespace LogShippingService
                     Log.Information("Skipping log restores for {targetDb} due to initialization", targetDb);
                     return;
                 }
-                var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.MinValue;
+                var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.Now.AddDays(-Config.MaxBackupAgeForInitialization);
                 fromDate = fromDate.AddMinutes(Config.OffsetMins);
                 try
                 {
