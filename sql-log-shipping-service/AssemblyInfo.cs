@@ -23,4 +23,4 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("Copyright © 2022 Trimble, Inc.")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
-[assembly: AssemblyVersion("1.7.4")]
+[assembly: AssemblyVersion("2.0.0")]
