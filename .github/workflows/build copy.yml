@@ -16,7 +16,7 @@ jobs:
       - name: Setup
         uses: actions/setup-dotnet@v5
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
       - name: Build solution
         run: dotnet build sql-log-shipping-service\LogShippingService.csproj -p:Configuration=Release -o Build
