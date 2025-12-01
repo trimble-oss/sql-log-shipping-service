@@ -16,6 +16,7 @@ namespace LogShippingService.FileHandling
 
         public static List<string> GetFoldersForAzBlob(List<string> prefixes)
         {
+            if (Config.ContainerUrl == null) return new List<string>();
             var containerUri = new Uri(Config.ContainerUrl);
             var containerClient = new BlobContainerClient(new Uri($"{containerUri}{Config.SASToken}"));
 
@@ -51,7 +52,7 @@ namespace LogShippingService.FileHandling
             {
                 var blobItems = containerClient.GetBlobs(BlobTraits.Metadata, BlobStates.None, path)
                     .Where(blobItem => IsFileNameMatchingPattern(blobItem.Name, pattern) &&
-                                       blobItem.Properties.LastModified.GetValueOrDefault(DateTimeOffset.MinValue).UtcDateTime>= maxAge);
+                                       blobItem.Properties.LastModified.GetValueOrDefault(DateTimeOffset.MinValue).UtcDateTime >= maxAge);
 
                 foreach (var blobItem in blobItems)
                 {

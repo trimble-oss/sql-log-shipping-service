@@ -6,6 +6,7 @@ using SerilogTimings;
 using System.Collections.Concurrent;
 using System.Data;
 using System.Numerics;
+using System.Threading.Channels;
 
 namespace LogShippingService
 {
@@ -18,6 +19,27 @@ namespace LogShippingService
         private static readonly object locker = new();
 
         private static Config Config => AppConfig.Config;
+
+        // Persistent work queue (unbounded to allow all databases to be queued per iteration)
+        private static readonly Channel<QueueItem> WorkQueue =
+            Channel.CreateUnbounded<QueueItem>(new UnboundedChannelOptions
+            {
+                SingleReader = false,
+                SingleWriter = false
+            });
+
+        private static readonly ConcurrentDictionary<string, byte> InProgress = new(StringComparer.OrdinalIgnoreCase);
+        private static readonly ConcurrentDictionary<string, byte> Enqueued = new(StringComparer.OrdinalIgnoreCase);
+        private readonly List<Task> _workers = new();
+
+        // Monitoring counters
+        private static long _enqueuedCount;
+
+        private static long _enqueueSkipAlreadyEnqueuedCount;
+        private static long _enqueueSkipInProgressCount;
+        private static long _dequeuedCount;
+        private static long _processedCount;
+        private static long _errorCount;
 
         public LogShipping()
         {
@@ -47,13 +69,17 @@ namespace LogShippingService
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             stoppingToken.Register(Stop);
-            var logRestoreTask = StartProcessing(stoppingToken);
+
+            // Start fixed-size worker pool once
+            StartWorkers(stoppingToken);
+
+            var logRestoreTask = StartProcessingAsync(stoppingToken);
 
             try
             {
                 if (_initializer != null)
                 {
-                    await Task.WhenAll(logRestoreTask, _initializer.RunPollForNewDBs(stoppingToken));
+                    await Task.WhenAll(logRestoreTask, _initializer.RunPollForNewDBsAsync(stoppingToken));
                 }
                 else
                 {
@@ -71,25 +97,104 @@ namespace LogShippingService
                 await Log.CloseAndFlushAsync();
                 Environment.Exit(1);
             }
+            finally
+            {
+                // Complete queue to release waiting workers and allow graceful shutdown
+                WorkQueue.Writer.TryComplete();
+                try
+                {
+                    await Task.WhenAll(_workers);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Log worker shutdown due to cancellation (expected)
+                    Log.Information("Workers shutdown due to cancellation request");
+                }
+                catch (Exception ex)
+                {
+                    // Log any unexpected errors during shutdown
+                    Log.Error(ex, "Unexpected error during worker shutdown");
+                }
+            }
         }
 
-        private async Task StartProcessing(CancellationToken stoppingToken)
+        private void StartWorkers(CancellationToken stoppingToken)
+        {
+            for (int i = 0; i < Config.MaxThreads; i++)
+            {
+                _workers.Add(Task.Run(() => WorkerDequeueAndProcessAsync(stoppingToken), stoppingToken));
+            }
+        }
+
+        // Processes queued databases until cancellation.
+        private async Task WorkerDequeueAndProcessAsync(CancellationToken stoppingToken)
+        {
+            while (await WorkQueue.Reader.WaitToReadAsync(stoppingToken))
+            {
+                while (WorkQueue.Reader.TryRead(out var item))
+                {
+                    // Count dequeue events
+                    Interlocked.Increment(ref _dequeuedCount);
+
+                    Enqueued.TryRemove(item.TargetDb, out _);
+
+                    if (!InProgress.TryAdd(item.TargetDb, 0))
+                    {
+                        // Count skip because DB is already processing
+                        // The database will be re-enqueued on the next iteration when QueueDatabasesForProcessing runs
+                        Interlocked.Increment(ref _enqueueSkipInProgressCount);
+                        Log.Debug("Skipping {targetDb}. Previous processing still running.", item.TargetDb);
+                        continue;
+                    }
+
+                    try
+                    {
+                        if (stoppingToken.IsCancellationRequested || !Waiter.CanRestoreLogsNow)
+                        {
+                            break;
+                        }
+                        await ProcessDatabaseAsync(item, stoppingToken);
+                        // Count successful process
+                        Interlocked.Increment(ref _processedCount);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Count errors
+                        Interlocked.Increment(ref _errorCount);
+                        Log.Error(ex, "Unhandled exception in background processing for {targetDb}", item.TargetDb);
+                    }
+                    finally
+                    {
+                        InProgress.TryRemove(item.TargetDb, out _);
+                    }
+                }
+            }
+        }
+
+        private async Task StartProcessingAsync(CancellationToken stoppingToken)
         {
             long i = 0;
             while (!stoppingToken.IsCancellationRequested)
             {
-                await WaitForNextIteration(i, stoppingToken);
+                await WaitForNextIterationAsync(i, stoppingToken);
                 i++;
                 using (Operation.Time($"Log restore iteration {i}"))
                 {
                     Log.Information("Starting log restore iteration {0}", i);
                     try
                     {
-                        await Process(stoppingToken);
+                        await QueueDatabasesForProcessing(stoppingToken);
                     }
                     catch (Exception ex)
                     {
                         Log.Error(ex, "Unexpected error processing log restores");
+                    }
+                    finally
+                    {
+                        // Emit iteration summary
+                        var s = GetStats();
+                        Log.Information("Iteration {iteration} stats: Enqueued={Enqueued}, Dequeued={Dequeued}, Processed={Processed}, SkippedAlreadyEnqueued={SkipEnqueued}, SkippedInProgress={SkipInProgress}, Errors={Errors}, InProgressNow={InProgress}",
+                            i, s.Enqueued, s.Dequeued, s.Processed, s.EnqueueSkipAlreadyEnqueued, s.EnqueueSkipInProgress, s.Errors, s.InProgressCount);
                     }
                 }
             }
@@ -99,7 +204,7 @@ namespace LogShippingService
         /// <summary>
         /// Wait for the required time before starting the next iteration.  Either a delay in milliseconds or a cron schedule can be used.  Also waits until active hours if configured.
         /// </summary>
-        private static async Task WaitForNextIteration(long count, CancellationToken stoppingToken)
+        private static async Task WaitForNextIterationAsync(long count, CancellationToken stoppingToken)
         {
             var nextIterationStart = DateTime.Now.AddMilliseconds(Config.DelayBetweenIterationsMs);
             if (Config.UseLogRestoreScheduleCron)
@@ -119,10 +224,10 @@ namespace LogShippingService
                 count > 0) // Only apply delay on first iteration if using a cron schedule
             {
                 Log.Information("Next log restore iteration will start at {nextIterationStart}", nextIterationStart);
-                await Waiter.WaitUntilTime(nextIterationStart, stoppingToken);
+                await Waiter.WaitUntilTimeAsync(nextIterationStart, stoppingToken);
             }
             // If active hours are configured, wait until the next active period
-            await Waiter.WaitUntilActiveHours(stoppingToken);
+            await Waiter.WaitUntilActiveHoursAsync(stoppingToken);
         }
 
         public void Stop()
@@ -130,7 +235,8 @@ namespace LogShippingService
             Log.Information("Initiating shutdown...");
         }
 
-        private Task Process(CancellationToken stoppingToken)
+        // Enqueue databases to be processed by workers.
+        private Task QueueDatabasesForProcessing(CancellationToken stoppingToken)
         {
             DataTable dt;
             using (Operation.Time("GetDatabases"))
@@ -146,27 +252,55 @@ namespace LogShippingService
                 }
             }
 
-            Parallel.ForEach(dt.AsEnumerable(), new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads }, row =>
+            foreach (var row in dt.AsEnumerable())
             {
-                if (stoppingToken.IsCancellationRequested || !Waiter.CanRestoreLogsNow) return;
+                if (stoppingToken.IsCancellationRequested || !Waiter.CanRestoreLogsNow) break;
+
                 var targetDb = (string)row["Name"];
                 var sourceDb = DatabaseInitializerBase.GetSourceDatabaseName(targetDb);
+
                 if (InitializingDBs.ContainsKey(targetDb.ToLower()))
                 {
                     Log.Information("Skipping log restores for {targetDb} due to initialization", targetDb);
-                    return;
+                    continue;
                 }
+
+                // Skip if currently being processed
+                if (InProgress.ContainsKey(targetDb))
+                {
+                    Interlocked.Increment(ref _enqueueSkipInProgressCount);
+                    Log.Debug("Skipping {targetDb}. Already in-progress.", targetDb);
+                    continue;
+                }
+
                 var fromDate = row["backup_finish_date"] as DateTime? ?? DateTime.Now.AddDays(-Config.MaxBackupAgeForInitialization);
                 fromDate = fromDate.AddMinutes(Config.OffsetMins);
-                try
+
+                var item = new QueueItem(sourceDb, targetDb, fromDate);
+
+                // Atomically mark as enqueued before writing to the channel.
+                // If TryAdd fails, it is already enqueued from a previous iteration.
+                if (!Enqueued.TryAdd(targetDb, 0))
                 {
-                    ProcessDatabase(sourceDb, targetDb, fromDate, stoppingToken);
+                    Interlocked.Increment(ref _enqueueSkipAlreadyEnqueuedCount);
+                    Log.Debug("Skipping {targetDb}. Already enqueued from a previous iteration.", targetDb);
+                    continue;
                 }
-                catch (Exception ex)
+
+                // Try to enqueue. If enqueue fails for any reason, remove the 'Enqueued' mark to avoid staleness.
+                var posted = WorkQueue.Writer.TryWrite(item);
+                if (posted)
                 {
-                    Log.Error(ex, "Error processing database {targetDb}", targetDb);
+                    Interlocked.Increment(ref _enqueuedCount);
                 }
-            });
+                else
+                {
+                    Enqueued.TryRemove(targetDb, out _);
+                    Log.Error("UNEXPECTED: Queue write failed for {targetDb} on unbounded channel. This may indicate the queue was completed (possibly during shutdown), memory/resource pressure, or an internal error. Check for shutdown signals or resource exhaustion. If this error persists, investigate system health and consider restarting the service. Will retry next iteration.", targetDb);
+                }
+            }
+
+            // Do NOT wait for queue to drain; iteration ends immediately
             return Task.CompletedTask;
         }
 
@@ -178,63 +312,61 @@ namespace LogShippingService
             return !isExcluded && isIncluded;
         }
 
-        private void ProcessDatabase(string sourceDb, string targetDb, DateTime fromDate, CancellationToken stoppingToken, int processCount = 1, bool reProcess = false)
+        private async Task ProcessDatabaseAsync(QueueItem item, CancellationToken stoppingToken, int processCount = 1, bool reProcess = false)
         {
-            var expectedTarget = DatabaseInitializerBase.GetDestinationDatabaseName(sourceDb);
-            if (!string.Equals(expectedTarget, targetDb, StringComparison.OrdinalIgnoreCase))
+            var expectedTarget = DatabaseInitializerBase.GetDestinationDatabaseName(item.SourceDb);
+            if (!string.Equals(expectedTarget, item.TargetDb, StringComparison.OrdinalIgnoreCase))
             {
-                Log.Debug("Skipping {targetDb}. Expected target to be {expectedName}", targetDb, expectedTarget);
+                Log.Debug("Skipping {targetDb}. Expected target to be {expectedName}", item.TargetDb, expectedTarget);
                 return;
             }
-            if (!IsIncludedDatabase(targetDb) && !IsIncludedDatabase(sourceDb))
+            if (!IsIncludedDatabase(item.TargetDb) && !IsIncludedDatabase(item.SourceDb))
             {
-                Log.Debug("Skipping {targetDb}. Database is excluded.", targetDb);
+                Log.Debug("Skipping {targetDb}. Database is excluded.", item.TargetDb);
                 return;
             }
-            var logFiles = GetFilesForDb(sourceDb, fromDate);
-            using (var op = Operation.Begin("Restore Logs for {DatabaseName}", targetDb))
+            var logFiles = GetFilesForDb(item.SourceDb, item.FromDate);
+            using (var op = Operation.Begin("Restore Logs for {DatabaseName}", item.TargetDb))
             {
                 try
                 {
-                    RestoreLogs(logFiles, sourceDb, targetDb, reProcess, stoppingToken);
+                    await RestoreLogsAsync(logFiles, item.SourceDb, item.TargetDb, reProcess, stoppingToken);
                     op.Complete();
                 }
                 catch (TimeoutException ex) when (ex.Message == "Max processing time exceeded")
                 {
                     Log.Warning(
                         "Max processing time exceeded. Log processing will continue for {targetDb} on the next iteration.",
-                        targetDb);
+                        item.TargetDb);
                     op.SetException(ex);
                 }
                 catch (SqlException ex) when (ex.Number == 4305)
                 {
-                    HandleTooRecent(ex, sourceDb, targetDb, fromDate, processCount, stoppingToken);
+                    await HandleTooRecentAsync(ex, item, processCount, stoppingToken);
                 }
                 catch (HeaderVerificationException ex) when (ex.VerificationStatus ==
                                                              BackupHeader.HeaderVerificationStatus.TooRecent)
                 {
-                    HandleTooRecent(ex, sourceDb, targetDb, fromDate, processCount, stoppingToken);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Error restoring logs for {targetDb}", targetDb);
+                    await HandleTooRecentAsync(ex, item, processCount, stoppingToken);
                 }
             }
         }
 
-        private void HandleTooRecent(Exception ex, string sourceDb, string targetDb, DateTime fromDate, int processCount, CancellationToken stoppingToken)
+        private async Task HandleTooRecentAsync(Exception ex, QueueItem item, int processCount, CancellationToken stoppingToken)
         {
             switch (processCount)
             {
                 // Too recent
                 case 1:
                     Log.Warning(ex, "The log file is too recent to apply.  Adjusting fromDate by 60min.");
-                    ProcessDatabase(sourceDb, targetDb, fromDate.AddMinutes(-60), stoppingToken, processCount + 1, true);
+                    item = new QueueItem(item.SourceDb, item.TargetDb, item.FromDate.AddMinutes(-60));
+                    await ProcessDatabaseAsync(item, stoppingToken, processCount + 1, true);
                     break;
 
                 case 2:
                     Log.Warning(ex, "The log file is too recent to apply.  Adjusting fromDate by 1 day.");
-                    ProcessDatabase(sourceDb, targetDb, fromDate.AddMinutes(-1440), stoppingToken, processCount + 1, true);
+                    item = new QueueItem(item.SourceDb, item.TargetDb, item.FromDate.AddMinutes(-1440));
+                    await ProcessDatabaseAsync(item, stoppingToken, processCount + 1, true);
                     break;
 
                 default:
@@ -243,7 +375,7 @@ namespace LogShippingService
             }
         }
 
-        private static Task RestoreLogs(IEnumerable<BackupFile> logFiles, string sourceDb, string targetDb, bool reProcess, CancellationToken stoppingToken)
+        private static Task RestoreLogsAsync(IEnumerable<BackupFile> logFiles, string sourceDb, string targetDb, bool reProcess, CancellationToken stoppingToken)
         {
             BigInteger? redoStartOrPreviousLastLSN = null;
             if (Config.CheckHeaders)
@@ -343,12 +475,12 @@ namespace LogShippingService
                         }
                         else if (header.FirstLSN > redoStartOrPreviousLastLSN)
                         {
-                            if (earlierLogFound && reProcess) 
+                            if (earlierLogFound && reProcess)
                             {
-                                // The current log is too recent.  We previously adjusted the search date looking for an earlier log.  Now we have found log files that are too early to apply, then this log that is too recent
+                                // The current log is too recent. We previously adjusted the search date looking for an earlier log.  Now we have found log files that are too early to apply, then this log that is too recent
                                 // The log chain appears to be broken, but log an error and continue processing in case the file has a later modified date than expected.
                                 Log.Error("Header verification failed for {FilePath}. An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}. NOTE: We previously found a log that was too early to apply.  Log chain might be broken, requiring manual intervention. Continuing to check log files just in case the file has a later modified date than expected.",
-                                    logBackup.FilePath,redoStartOrPreviousLastLSN,header.FirstLSN,header.LastLSN);
+                                    logBackup.FilePath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
                                 continue;
                             }
                             throw new HeaderVerificationException($"Header verification failed for {logBackup.FilePath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
@@ -491,6 +623,20 @@ namespace LogShippingService
             }
 
             return logFiles;
+        }
+
+        // Snapshot current monitoring state
+        private static (long Enqueued, long EnqueueSkipAlreadyEnqueued, long EnqueueSkipInProgress, long Dequeued, long Processed, long Errors, int InProgressCount) GetStats()
+        {
+            return (
+                Enqueued: Interlocked.Read(ref _enqueuedCount),
+                EnqueueSkipAlreadyEnqueued: Interlocked.Read(ref _enqueueSkipAlreadyEnqueuedCount),
+                EnqueueSkipInProgress: Interlocked.Read(ref _enqueueSkipInProgressCount),
+                Dequeued: Interlocked.Read(ref _dequeuedCount),
+                Processed: Interlocked.Read(ref _processedCount),
+                Errors: Interlocked.Read(ref _errorCount),
+                InProgressCount: InProgress.Count
+            );
         }
     }
 }

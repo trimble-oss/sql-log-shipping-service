@@ -11,7 +11,7 @@ namespace LogShippingService
     {
         private static Config Config => AppConfig.Config;
 
-        public static async Task WaitUntilActiveHours(CancellationToken stoppingToken)
+        public static async Task WaitUntilActiveHoursAsync(CancellationToken stoppingToken)
         {
             if (CanRestoreLogsNow) return;
 
@@ -28,7 +28,7 @@ namespace LogShippingService
             }
         }
 
-        public static async Task WaitUntilTime(DateTime waitUntil, CancellationToken stoppingToken)
+        public static async Task WaitUntilTimeAsync(DateTime waitUntil, CancellationToken stoppingToken)
         {
             int delayMilliseconds;
             do
