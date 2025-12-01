@@ -12,7 +12,7 @@ namespace LogShippingService.FileHandling
         public override IEnumerable<BackupFile> GetFiles(string path, string pattern, DateTime maxAge, bool ascending)
         {
             var paths = path.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-            return GetFilesFromUrlsS3(paths, pattern, maxAge, ascending).Result;
+            return GetFilesFromUrlsS3Async(paths, pattern, maxAge, ascending).Result;
         }
 
         protected override IEnumerable<string> GetDatabasesSpecific()
@@ -30,13 +30,13 @@ namespace LogShippingService.FileHandling
             }).ToList();
 
             Log.Information("Polling for new databases from S3.  Prefix: {prefix}", dbRootList);
-            return ListFoldersFromS3Paths(dbRootList).Result;
+            return ListFoldersFromS3PathsAsync(dbRootList).Result;
         }
 
-        public static async Task<IEnumerable<BackupFile>> GetFilesFromUrlsS3(List<string> paths, string pattern, DateTime MaxAge, bool ascending)
+        public static async Task<IEnumerable<BackupFile>> GetFilesFromUrlsS3Async(List<string> paths, string pattern, DateTime MaxAge, bool ascending)
         {
             // Use Task.WhenAll to await all the tasks initiated for each path
-            var tasks = paths.Select(path => GetFilesFromUrlS3(path, pattern, MaxAge)).ToList();
+            var tasks = paths.Select(path => GetFilesFromUrlS3Async(path, pattern, MaxAge)).ToList();
             var filesFromAllPaths = await Task.WhenAll(tasks);
 
             // Flatten the results and order them
@@ -44,7 +44,7 @@ namespace LogShippingService.FileHandling
             return ascending ? allFiles.OrderBy(file => file.LastModifiedUtc) : allFiles.OrderByDescending(file => file.LastModifiedUtc);
         }
 
-        private static async Task<IEnumerable<BackupFile>> GetFilesFromUrlS3(string path, string pattern, DateTime MaxAge)
+        private static async Task<IEnumerable<BackupFile>> GetFilesFromUrlS3Async(string path, string pattern, DateTime MaxAge)
         {
             var s3Uri = new S3Uri(path);
             var request = new ListObjectsV2Request
@@ -74,8 +74,8 @@ namespace LogShippingService.FileHandling
                 }
 
                 request.ContinuationToken = response.NextContinuationToken;
-            } while (response.IsTruncated==true);
-            
+            } while (response.IsTruncated == true);
+
             return files;
         }
 
@@ -99,10 +99,10 @@ namespace LogShippingService.FileHandling
             return new AmazonS3Client(cred, config);
         }
 
-        public static async Task<List<string>> ListFoldersFromS3Paths(List<string> paths)
+        public static async Task<List<string>> ListFoldersFromS3PathsAsync(List<string> paths)
         {
             // Initiate folder listing tasks for each path in parallel
-            var tasks = paths.Select(ListFoldersFromS3SinglePath).ToList();
+            var tasks = paths.Select(ListFoldersFromS3SinglePathAsync).ToList();
             var foldersFromAllPaths = await Task.WhenAll(tasks);
 
             // Flatten results and remove duplicates
@@ -111,7 +111,7 @@ namespace LogShippingService.FileHandling
             return allFolders;
         }
 
-        public static async Task<List<string>> ListFoldersFromS3SinglePath(string path)
+        public static async Task<List<string>> ListFoldersFromS3SinglePathAsync(string path)
         {
             var s3Uri = new S3Uri(path);
             var s3Client = GetS3Client(s3Uri.Region);

@@ -55,7 +55,7 @@ namespace LogShippingService
             return LogShipping.IsIncludedDatabase(sourceDb) || LogShipping.IsIncludedDatabase(targetDb);
         }
 
-        public async Task RunPollForNewDBs(CancellationToken stoppingToken)
+        public async Task RunPollForNewDBsAsync(CancellationToken stoppingToken)
         {
             if (!IsValidated)
             {
@@ -66,7 +66,7 @@ namespace LogShippingService
             long i = 0;
             while (!stoppingToken.IsCancellationRequested)
             {
-                await WaitForNextInitialization(i, stoppingToken);
+                await WaitForNextInitializationAsync(i, stoppingToken);
                 i++;
                 if (stoppingToken.IsCancellationRequested) return;
                 try
@@ -98,7 +98,7 @@ namespace LogShippingService
         /// <summary>
         /// Wait for the required time before starting the next iteration.  Either a delay in milliseconds or a cron schedule can be used.  Also waits until active hours if configured.
         /// </summary>
-        private static async Task WaitForNextInitialization(long count, CancellationToken stoppingToken)
+        private static async Task WaitForNextInitializationAsync(long count, CancellationToken stoppingToken)
         {
             var nextIterationStart = DateTime.Now.AddMinutes(Config.PollForNewDatabasesFrequency);
             if (Config.UsePollForNewDatabasesCron)
@@ -118,10 +118,10 @@ namespace LogShippingService
                 count > 0) // Only apply delay on first iteration if using a cron schedule
             {
                 Log.Information("Next new database initialization will start at {nextIterationStart}", nextIterationStart);
-                await Waiter.WaitUntilTime(nextIterationStart, stoppingToken);
+                await Waiter.WaitUntilTimeAsync(nextIterationStart, stoppingToken);
             }
             // If active hours are configured, wait until the next active period
-            await Waiter.WaitUntilActiveHours(stoppingToken);
+            await Waiter.WaitUntilActiveHoursAsync(stoppingToken);
         }
 
         protected static void ProcessRestore(string sourceDb, string targetDb, List<string> fullFiles, List<string> diffFiles, BackupHeader.DeviceTypes deviceType)
