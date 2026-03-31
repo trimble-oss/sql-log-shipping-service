@@ -26,7 +26,7 @@ namespace LogShippingService.FileHandling
             // Parallelize the processing of each prefix
             Parallel.ForEach(prefixes, prefix =>
             {
-                var results = containerClient.GetBlobsByHierarchy(prefix: prefix, delimiter: "/").AsPages();
+                var results = containerClient.GetBlobsByHierarchy(BlobTraits.None, BlobStates.None, "/", prefix).AsPages();
 
                 results.SelectMany(blobPage => blobPage.Values)
                     .Where(item => item.IsPrefix)
@@ -50,7 +50,7 @@ namespace LogShippingService.FileHandling
 
             Parallel.ForEach(paths, path =>
             {
-                var blobItems = containerClient.GetBlobs(BlobTraits.Metadata, BlobStates.None, path)
+                var blobItems = containerClient.GetBlobs(BlobTraits.Metadata, BlobStates.None, path, CancellationToken.None)
                     .Where(blobItem => IsFileNameMatchingPattern(blobItem.Name, pattern) &&
                                        blobItem.Properties.LastModified.GetValueOrDefault(DateTimeOffset.MinValue).UtcDateTime >= maxAge);
 
