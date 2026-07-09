@@ -330,7 +330,7 @@ namespace LogShippingService
             {
                 try
                 {
-                    await RestoreLogsAsync(logFiles, item.SourceDb, item.TargetDb, reProcess, stoppingToken);
+                    await RestoreLogsAsync(logFiles, item.SourceDb, item.TargetDb, item.FromDate, reProcess, stoppingToken);
                     op.Complete();
                 }
                 catch (TimeoutException ex) when (ex.Message == "Max processing time exceeded")
@@ -349,7 +349,28 @@ namespace LogShippingService
                 {
                     await HandleTooRecentAsync(ex, item, processCount, stoppingToken);
                 }
+                catch (ReinitializeRequiredException ex)
+                {
+                    op.SetException(ex);
+                    ReInitializeDatabase(ex.SourceDb, ex.TargetDb, ex.Reason);
+                }
             }
+        }
+
+        /// <summary>
+        /// Queue a database to be dropped and re-initialized because its source log chain can no longer be continued - the
+        /// source database was re-created (dropped &amp; re-created with the same name), or the log chain was otherwise broken
+        /// (e.g. the recovery model was switched to SIMPLE and back to FULL).  The restore runs on the shared initialization
+        /// queue so the log-restore worker is not blocked.
+        /// </summary>
+        private void ReInitializeDatabase(string sourceDb, string targetDb, string reason)
+        {
+            if (_initializer == null)
+            {
+                AuditLog.Reinitialization.Error("Cannot re-initialize {targetDb}.  No initializer is configured.  Drop and re-initialize it manually.  Reason for re-initialization: {reason}", targetDb, reason);
+                return;
+            }
+            _initializer.EnqueueInitialization(sourceDb, targetDb, InitReason.Reinitialize, reason);
         }
 
         private async Task HandleTooRecentAsync(Exception ex, QueueItem item, int processCount, CancellationToken stoppingToken)
@@ -375,7 +396,7 @@ namespace LogShippingService
             }
         }
 
-        private static Task RestoreLogsAsync(IEnumerable<BackupFile> logFiles, string sourceDb, string targetDb, bool reProcess, CancellationToken stoppingToken)
+        private static Task RestoreLogsAsync(IEnumerable<BackupFile> logFiles, string sourceDb, string targetDb, DateTime fromDate, bool reProcess, CancellationToken stoppingToken)
         {
             BigInteger? redoStartOrPreviousLastLSN = null;
             if (Config.CheckHeaders)
@@ -388,6 +409,17 @@ namespace LogShippingService
             bool breakProcessingFlag = false;
             var stopAt = Config.StopAt > DateTime.MinValue && Config.StopAt < DateTime.MaxValue ? ", STOPAT=" + Config.StopAt.ToString("yyyy-MM-ddTHH:mm:ss.fff").SqlSingleQuote() : "";
             var earlierLogFound = false;
+
+            // DatabaseCreationDate of the last log that belongs to the current chain (last restored / tip).
+            // Used to detect when the source database has been dropped & re-created: a re-created database has a newer creation date.
+            DateTime? currentChainCreationDate = null;
+            // BackupFinishDate of the last log that belongs to the current chain.  A broken/re-created chain is only ever acted on if the
+            // triggering log was genuinely taken after this - guards the destructive re-initialization against stale/out-of-order files.
+            DateTime? currentChainBackupFinishDate = null;
+            // Set when a log is found that breaks the current chain (source database re-created or the log chain was otherwise reset).
+            BackupHeader? brokenChainHeader = null;
+            string? brokenChainLogPath = null;
+            var brokenChainStatus = LogChainStatus.Ok;
             foreach (var logBackup in logFiles)
             {
                 if (DateTime.Now > maxTime)
@@ -444,46 +476,67 @@ namespace LogShippingService
                                 $"Header verification failed for {logBackup}.  Database: {header.DatabaseName}. Expected a backup for {targetDb}", BackupHeader.HeaderVerificationStatus.WrongDatabase);
                         }
 
-                        if (Config.RestoreDelayMins > 0 && DateTime.Now.Subtract(header.BackupFinishDate).TotalMinutes < Config.RestoreDelayMins)
+                        var action = ClassifyLog(header, currentChainCreationDate, currentChainBackupFinishDate ?? fromDate, redoStartOrPreviousLastLSN, DateTime.Now, Config.RestoreDelayMins);
+                        switch (action)
                         {
-                            Log.Information("Waiting to restore {logPath} & subsequent files.  Backup Finish Date: {BackupFinishDate}. Eligible for restore after {RestoreAfter}, RestoreDelayMins:{RestoreDelay}", logBackup.FilePath, header.BackupFinishDate, header.BackupFinishDate.AddMinutes(Config.RestoreDelayMins), Config.RestoreDelayMins);
-                            breakProcessingFlag = true;
-                            break;
-                        }
-                        else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN == redoStartOrPreviousLastLSN)
-                        {
-                            if (reProcess) // Reprocess previous file if we got a too recent error, otherwise skip it
-                            {
-                                Log.Information("Re-processing {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
+                            case LogRestoreAction.WaitDelay:
+                                Log.Information("Waiting to restore {logPath} & subsequent files.  Backup Finish Date: {BackupFinishDate}. Eligible for restore after {RestoreAfter}, RestoreDelayMins:{RestoreDelay}", logBackup.FilePath, header.BackupFinishDate, header.BackupFinishDate.AddMinutes(Config.RestoreDelayMins), Config.RestoreDelayMins);
+                                breakProcessingFlag = true;
+                                break;
+
+                            case LogRestoreAction.SourceRecreated:
+                            case LogRestoreAction.ChainBroken:
+                                // The log can't be applied to the current chain because the source chain was reset
+                                // (the source database was re-created, or its recovery model was switched to SIMPLE and back to FULL).
+                                // Record only the first detection (the earliest divergence) but keep scanning the remaining files -
+                                // a later file may still connect to the redo point (e.g. out-of-order modified dates / reProcess walk-back),
+                                // in which case acting now would be premature.  Logging once avoids a warning per newer-incarnation file.
+                                if (brokenChainHeader == null)
+                                {
+                                    brokenChainStatus = action == LogRestoreAction.SourceRecreated ? LogChainStatus.Recreated : LogChainStatus.Broken;
+                                    brokenChainHeader = header;
+                                    brokenChainLogPath = logBackup.FilePath;
+                                    LogBrokenChainDetected(brokenChainStatus, sourceDb, logBackup.FilePath, header, currentChainCreationDate, redoStartOrPreviousLastLSN);
+                                }
                                 continue;
-                            }
-                            else
-                            {
-                                Log.Information("Skipping {logPath}, FILE={Position}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
+
+                            case LogRestoreAction.LastRestored:
+                                currentChainCreationDate = header.DatabaseCreationDate; // This is the last log we restored - use its creation date as the reference for the current chain
+                                currentChainBackupFinishDate = header.BackupFinishDate;
+                                if (reProcess) // Reprocess previous file if we got a too recent error, otherwise skip it
+                                {
+                                    Log.Information("Re-processing {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
+                                }
+                                else
+                                {
+                                    Log.Information("Skipping {logPath}, FILE={Position}. Found last log file restored.  FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
+                                }
                                 continue;
-                            }
-                        }
-                        else if (header.FirstLSN <= redoStartOrPreviousLastLSN && header.LastLSN > redoStartOrPreviousLastLSN)
-                        {
-                            Log.Information("Header verification successful for {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
-                        }
-                        else if (header.FirstLSN < redoStartOrPreviousLastLSN)
-                        {
-                            earlierLogFound = true;
-                            Log.Information("Skipping {logPath}.  A later LSN is required: {RequiredLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
-                            continue;
-                        }
-                        else if (header.FirstLSN > redoStartOrPreviousLastLSN)
-                        {
-                            if (earlierLogFound && reProcess)
-                            {
-                                // The current log is too recent. We previously adjusted the search date looking for an earlier log.  Now we have found log files that are too early to apply, then this log that is too recent
-                                // The log chain appears to be broken, but log an error and continue processing in case the file has a later modified date than expected.
-                                Log.Error("Header verification failed for {FilePath}. An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}. NOTE: We previously found a log that was too early to apply.  Log chain might be broken, requiring manual intervention. Continuing to check log files just in case the file has a later modified date than expected.",
-                                    logBackup.FilePath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
+
+                            case LogRestoreAction.TooOld:
+                                earlierLogFound = true;
+                                Log.Information("Skipping {logPath}.  A later LSN is required: {RequiredLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
                                 continue;
-                            }
-                            throw new HeaderVerificationException($"Header verification failed for {logBackup.FilePath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
+
+                            case LogRestoreAction.TooRecent:
+                                if (earlierLogFound && reProcess)
+                                {
+                                    // The current log is too recent. We previously adjusted the search date looking for an earlier log.  Now we have found log files that are too early to apply, then this log that is too recent
+                                    // The log chain appears to be broken, but log an error and continue processing in case the file has a later modified date than expected.
+                                    Log.Error("Header verification failed for {FilePath}. An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}. NOTE: We previously found a log that was too early to apply.  Log chain might be broken, requiring manual intervention. Continuing to check log files just in case the file has a later modified date than expected.",
+                                        logBackup.FilePath, redoStartOrPreviousLastLSN, header.FirstLSN, header.LastLSN);
+                                    continue;
+                                }
+                                throw new HeaderVerificationException($"Header verification failed for {logBackup.FilePath}.  An earlier LSN is required: {redoStartOrPreviousLastLSN}, FirstLSN: {header.FirstLSN}, LastLSN: {header.LastLSN}", BackupHeader.HeaderVerificationStatus.TooRecent);
+
+                            case LogRestoreAction.Apply:
+                                Log.Information("Header verification successful for {logPath}, FILE={Position}. FirstLSN: {FirstLSN}, LastLSN: {LastLSN}", logBackup.FilePath, header.Position, header.FirstLSN, header.LastLSN);
+                                break;
+                        }
+
+                        if (breakProcessingFlag)
+                        {
+                            break; // WaitDelay - stop processing this and subsequent files
                         }
 
                         var completed = ProcessRestoreCommand(sql, targetDb, file);
@@ -498,6 +551,12 @@ namespace LogShippingService
                             break;
                         }
                         redoStartOrPreviousLastLSN = header.LastLSN;
+                        if (completed)
+                        {
+                            // Advance the reference as we restore logs in the current chain
+                            currentChainCreationDate = header.DatabaseCreationDate;
+                            currentChainBackupFinishDate = header.BackupFinishDate;
+                        }
                     }
                 }
                 else
@@ -505,8 +564,155 @@ namespace LogShippingService
                     ProcessRestoreCommand(sql, targetDb, file);
                 }
             }
+
+            if (brokenChainHeader != null)
+            {
+                var reason = brokenChainStatus == LogChainStatus.Recreated
+                    ? $"source database {sourceDb} has been re-created (dropped & re-created with the same name)"
+                    : $"the log chain for source database {sourceDb} has been broken (e.g. the recovery model was switched to SIMPLE and back to FULL)";
+                if (Config.EnableReinitialization)
+                {
+                    AuditLog.Reinitialization.Warning("The log chain for {targetDb} cannot continue - {reason}.  {logPath} begins a new log chain (BeginsLogChain: {BeginsLogChain}, DatabaseCreationDate: {DatabaseCreationDate:o}, FirstLSN: {FirstLSN}).  EnableReinitialization is enabled - {targetDb} will be dropped and re-initialized.",
+                        targetDb, reason, brokenChainLogPath, brokenChainHeader.BeginsLogChain, brokenChainHeader.DatabaseCreationDate, brokenChainHeader.FirstLSN, targetDb);
+                    throw new ReinitializeRequiredException(
+                        $"The log chain for {targetDb} cannot continue - {reason}.  {brokenChainLogPath} begins a new log chain (BeginsLogChain: {brokenChainHeader.BeginsLogChain}, DatabaseCreationDate: {brokenChainHeader.DatabaseCreationDate:o}, FirstLSN: {brokenChainHeader.FirstLSN}).  {targetDb} must be dropped and re-initialized from a current backup to resume log shipping.",
+                        sourceDb, targetDb, reason);
+                }
+                AuditLog.Reinitialization.Error("The log chain for {targetDb} cannot continue - {reason}.  {logPath} begins a new log chain (BeginsLogChain: {BeginsLogChain}, DatabaseCreationDate: {DatabaseCreationDate:o}, FirstLSN: {FirstLSN}).  {targetDb} must be dropped and re-initialized from a current backup to resume log shipping.  Set EnableReinitialization to true to perform this automatically.",
+                    targetDb, reason, brokenChainLogPath, brokenChainHeader.BeginsLogChain, brokenChainHeader.DatabaseCreationDate, brokenChainHeader.FirstLSN, targetDb);
+            }
+
             RestoreWithStandby(targetDb);
             return Task.CompletedTask;
+        }
+
+        internal enum LogChainStatus
+        {
+            /// <summary>The log continues the current chain, or its position simply doesn't line up yet (not a broken chain).</summary>
+            Ok,
+
+            /// <summary>The source database has been dropped &amp; re-created with the same name (newer DatabaseCreationDate).</summary>
+            Recreated,
+
+            /// <summary>The log chain has been reset/broken at the source (e.g. recovery model switched to SIMPLE and back to FULL).</summary>
+            Broken
+        }
+
+        /// <summary>
+        /// The action to take for a single log backup, based on its position relative to the current redo point,
+        /// the restore delay, and the chain integrity (<see cref="GetLogChainStatus"/>).  Produced by <see cref="ClassifyLog"/>
+        /// so the restore loop can switch on intent rather than re-deriving the decision from several overlapping conditions.
+        /// </summary>
+        internal enum LogRestoreAction
+        {
+            /// <summary>The next log in the current chain - restore it.</summary>
+            Apply,
+
+            /// <summary>The log is the last one restored - the current tip (its LastLSN matches the redo point) - skip / re-process.</summary>
+            LastRestored,
+
+            /// <summary>The log is entirely before the redo point - too early to apply, skip and keep looking.</summary>
+            TooOld,
+
+            /// <summary>The log begins after the redo point - a gap; too recent to apply.</summary>
+            TooRecent,
+
+            /// <summary>The log is not yet eligible for restore because of the configured restore delay - stop processing.</summary>
+            WaitDelay,
+
+            /// <summary>The source database has been dropped &amp; re-created with the same name.</summary>
+            SourceRecreated,
+
+            /// <summary>The source log chain has been reset/broken (e.g. recovery model switched to SIMPLE and back to FULL).</summary>
+            ChainBroken
+        }
+
+        /// <summary>
+        /// Classify a single log backup into the <see cref="LogRestoreAction"/> the restore loop should take.  Precedence:
+        /// (1) the restore delay (not eligible yet), then (2) the log's LSN position relative to the current redo point, with the
+        /// chain integrity (<see cref="GetLogChainStatus"/>) overriding the position when the source was re-created or the chain
+        /// was reset.  Pure and deterministic so it can be unit-tested without a SQL Server instance - all state is passed in.
+        /// A re-created source diverts every position; a broken chain only diverts the too-old / too-recent positions (matching
+        /// the original behaviour, where an exact-tip or spanning log is never treated as broken).
+        /// </summary>
+        internal static LogRestoreAction ClassifyLog(BackupHeader header, DateTime? currentChainCreationDate, DateTime referenceBackupFinishDate, BigInteger? redoStart, DateTime now, int restoreDelayMins)
+        {
+            if (restoreDelayMins > 0 && now.Subtract(header.BackupFinishDate).TotalMinutes < restoreDelayMins)
+            {
+                return LogRestoreAction.WaitDelay;
+            }
+
+            if (header.FirstLSN <= redoStart && header.LastLSN == redoStart)
+            {
+                // The last log we already restored.  Only a re-created source diverts here (an exact-tip log can't be "ahead").
+                return GetLogChainStatus(header, currentChainCreationDate, referenceBackupFinishDate, redoStart) == LogChainStatus.Recreated
+                    ? LogRestoreAction.SourceRecreated
+                    : LogRestoreAction.LastRestored;
+            }
+            if (header.FirstLSN <= redoStart && header.LastLSN > redoStart)
+            {
+                // The next log that spans the redo point - restore it.  Only a re-created source diverts here.
+                return GetLogChainStatus(header, currentChainCreationDate, referenceBackupFinishDate, redoStart) == LogChainStatus.Recreated
+                    ? LogRestoreAction.SourceRecreated
+                    : LogRestoreAction.Apply;
+            }
+            if (header.FirstLSN < redoStart)
+            {
+                return MapChainStatus(GetLogChainStatus(header, currentChainCreationDate, referenceBackupFinishDate, redoStart), LogRestoreAction.TooOld);
+            }
+            if (header.FirstLSN > redoStart)
+            {
+                return MapChainStatus(GetLogChainStatus(header, currentChainCreationDate, referenceBackupFinishDate, redoStart), LogRestoreAction.TooRecent);
+            }
+
+            // redoStart is null (no redo point yet) - the LSN comparisons above are all false; restore the log.
+            return LogRestoreAction.Apply;
+
+            static LogRestoreAction MapChainStatus(LogChainStatus status, LogRestoreAction whenOk) => status switch
+            {
+                LogChainStatus.Recreated => LogRestoreAction.SourceRecreated,
+                LogChainStatus.Broken => LogRestoreAction.ChainBroken,
+                _ => whenOk
+            };
+        }
+
+        /// <summary>
+        /// Classify a log backup that does not connect to the current redo point.  A newer DatabaseCreationDate means the source database
+        /// was re-created.  BeginsLogChain means a new log chain has started that we can't bridge onto - but only treat it as broken when it
+        /// is ahead of our redo point (FirstLSN > redo start) or we have no reference chain, otherwise it is just our own chain's original
+        /// first log re-appearing (older finish date pulled in by a reProcess walk-back) which is safe to skip.  As a safeguard for the
+        /// destructive re-initialization, a chain is only ever considered broken when the log was genuinely taken after the last log we
+        /// restored (BackupFinishDate) - protects against acting on a stale or out-of-order backup file.
+        /// </summary>
+        internal static LogChainStatus GetLogChainStatus(BackupHeader header, DateTime? currentChainCreationDate, DateTime referenceBackupFinishDate, BigInteger? redoStart)
+        {
+            if (header.BackupFinishDate <= referenceBackupFinishDate)
+            {
+                return LogChainStatus.Ok; // Not newer than the last log we restored - don't treat as a broken chain
+            }
+            if (currentChainCreationDate.HasValue && header.DatabaseCreationDate > currentChainCreationDate.Value)
+            {
+                return LogChainStatus.Recreated;
+            }
+            if (header.BeginsLogChain && (redoStart == null || header.FirstLSN > redoStart || !currentChainCreationDate.HasValue))
+            {
+                return LogChainStatus.Broken;
+            }
+            return LogChainStatus.Ok;
+        }
+
+        private static void LogBrokenChainDetected(LogChainStatus status, string sourceDb, string logPath, BackupHeader header, DateTime? currentChainCreationDate, BigInteger? redoStart)
+        {
+            if (status == LogChainStatus.Recreated)
+            {
+                Log.Warning("Detected that source database {sourceDb} has been re-created (dropped & re-created with the same name).  {logPath} belongs to a newer incarnation - DatabaseCreationDate: {HeaderCreateDate} is newer than the current chain: {ChainCreateDate}.  BeginsLogChain: {BeginsLogChain}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}",
+                    sourceDb, logPath, header.DatabaseCreationDate, currentChainCreationDate, header.BeginsLogChain, header.FirstLSN, header.LastLSN);
+            }
+            else
+            {
+                Log.Warning("Detected a broken log chain for source database {sourceDb} (e.g. the recovery model was switched to SIMPLE and back to FULL).  {logPath} begins a new log chain that cannot be applied - BeginsLogChain: {BeginsLogChain}, FirstLSN: {FirstLSN}, LastLSN: {LastLSN}, required LSN: {RequiredLSN}",
+                    sourceDb, logPath, header.BeginsLogChain, header.FirstLSN, header.LastLSN, redoStart);
+            }
         }
 
         private static bool ProcessRestoreCommand(string sql, string db, string file)
@@ -552,7 +758,7 @@ namespace LogShippingService
             return false;
         }
 
-        private static bool KillUserConnections(string db)
+        internal static bool KillUserConnections(string db)
         {
             if (Config.KillUserConnections)
             {

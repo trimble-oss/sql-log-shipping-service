@@ -3,6 +3,8 @@ using static LogShippingService.BackupHeader;
 using System.Reflection.PortableExecutable;
 using LogShippingService.FileHandling;
 using SerilogTimings;
+using System.Collections.Concurrent;
+using System.Threading.Channels;
 
 namespace LogShippingService
 {
@@ -14,29 +16,186 @@ namespace LogShippingService
 
         private static Config Config => AppConfig.Config;
 
-        protected void ProcessDB(string sourceDb, CancellationToken stoppingToken)
+        // Shared queue for initialization AND re-initialization.  Both perform a FULL restore, so they share a single bounded
+        // consumer pool (Config.MaxConcurrentInitializations) rather than competing with the log-restore worker pool.
+        private readonly Channel<InitRequest> _initQueue =
+            Channel.CreateUnbounded<InitRequest>(new UnboundedChannelOptions { SingleReader = false, SingleWriter = false });
+
+        // Databases currently queued or being (re)initialized, keyed by targetDb.  Used to dedup enqueue requests.
+        private readonly ConcurrentDictionary<string, InitReason> _inFlight = new(StringComparer.OrdinalIgnoreCase);
+
+        // A failed re-initialization is requeued (with a delay) up to this many attempts.  New-database initialization is not
+        // requeued here - it is naturally retried by the next poll iteration.
+        private const int MaxReinitAttempts = 3;
+
+        private static readonly TimeSpan ReinitRetryDelay = TimeSpan.FromMinutes(1);
+
+        /// <summary>
+        /// Queue a database to be (re)initialized from a FULL backup.  Deduplicated by target database and gated so log restores
+        /// are skipped until the (re)initialization completes.  Non-blocking - the actual restore runs on a consumer thread.
+        /// </summary>
+        internal void EnqueueInitialization(string sourceDb, string targetDb, InitReason reason, string? detail)
         {
-            var targetDb = GetDestinationDatabaseName(sourceDb);
-            if (!IsValidForInitialization(sourceDb, targetDb)) return;
-            if (stoppingToken.IsCancellationRequested) return;
+            if (!IsValidated)
+            {
+                AuditLog.Reinitialization.Error("Cannot {reason} {targetDb}. Initialization is not configured.  Handle it manually.  Detail: {detail}", reason, targetDb, detail);
+                return;
+            }
+            if (!_inFlight.TryAdd(targetDb, reason)) // Already queued or in progress
+            {
+                Log.Debug("Skipping {reason} for {targetDb}; already initializing.", reason, targetDb);
+                return;
+            }
+            LogShipping.InitializingDBs[targetDb.ToLower()] = targetDb; // Prevent log restores until (re)initialization is complete
+            if (!_initQueue.Writer.TryWrite(new InitRequest(sourceDb, targetDb, reason, detail)))
+            {
+                ReleaseGate(targetDb);
+                Log.Error("Failed to queue {reason} for {targetDb}", reason, targetDb);
+            }
+        }
+
+        /// <summary>Clear the dedup entry and the log-restore gate for a database once (re)initialization is terminal.</summary>
+        private void ReleaseGate(string targetDb)
+        {
+            _inFlight.TryRemove(targetDb, out _);
+            LogShipping.InitializingDBs.TryRemove(targetDb.ToLower(), out _); // Log restores can resume
+        }
+
+        /// <summary>Start the fixed-size pool of consumers that drain the (re)initialization queue.</summary>
+        private List<Task> StartInitializationConsumers(CancellationToken stoppingToken)
+        {
+            var count = Math.Max(1, Config.MaxConcurrentInitializations);
+            Log.Information("Starting {count} initialization consumer(s)", count);
+            var consumers = new List<Task>(count);
+            for (var i = 0; i < count; i++)
+            {
+                consumers.Add(Task.Run(() => ConsumeInitializationsAsync(stoppingToken), stoppingToken));
+            }
+            return consumers;
+        }
+
+        /// <summary>
+        /// Consume (re)initialization requests until cancellation.  In-flight restores are never cancelled mid-operation
+        /// (the cancellation token is only observed between requests).  A failed re-initialization is requeued with a delay.
+        /// </summary>
+        private async Task ConsumeInitializationsAsync(CancellationToken stoppingToken)
+        {
+            while (await _initQueue.Reader.WaitToReadAsync(stoppingToken))
+            {
+                while (_initQueue.Reader.TryRead(out var req))
+                {
+                    var requeued = false;
+                    try
+                    {
+                        var success = req.Reason == InitReason.Reinitialize
+                            ? RunReInitialize(req.SourceDb, req.TargetDb, req.Detail ?? string.Empty)
+                            : RunInitialize(req.SourceDb, req.TargetDb, stoppingToken);
+
+                        if (!success && req.Reason == InitReason.Reinitialize && req.Attempt < MaxReinitAttempts)
+                        {
+                            requeued = RequeueWithDelay(req with { Attempt = req.Attempt + 1 }, stoppingToken);
+                        }
+                        else if (!success && req.Reason == InitReason.Reinitialize)
+                        {
+                            AuditLog.Reinitialization.Error("Giving up re-initializing {targetDb} after {attempts} attempts.  A later log restore will re-detect the broken chain.  Detail: {detail}", req.TargetDb, req.Attempt, req.Detail);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Unhandled error processing {reason} for {targetDb}", req.Reason, req.TargetDb);
+                    }
+                    finally
+                    {
+                        if (!requeued)
+                        {
+                            ReleaseGate(req.TargetDb); // Terminal outcome (success or gave up) - a requeued request keeps the gate held
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>Requeue a failed re-initialization after a delay, keeping the gate held so log restores stay blocked.</summary>
+        private bool RequeueWithDelay(InitRequest req, CancellationToken stoppingToken)
+        {
+            AuditLog.Reinitialization.Warning("Re-initialization of {targetDb} did not complete.  Retrying (attempt {attempt}/{max}) in {delay}.", req.TargetDb, req.Attempt, MaxReinitAttempts, ReinitRetryDelay);
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(ReinitRetryDelay, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    ReleaseGate(req.TargetDb);
+                    return;
+                }
+                if (!_initQueue.Writer.TryWrite(req))
+                {
+                    ReleaseGate(req.TargetDb);
+                }
+            }, stoppingToken);
+            return true;
+        }
+
+        /// <summary>
+        /// Initialize a new database from a FULL backup.  Returns true when terminal (nothing more to do) - new-database
+        /// initialization is not requeued on failure; the next poll iteration retries it.
+        /// </summary>
+        private bool RunInitialize(string sourceDb, string targetDb, CancellationToken stoppingToken)
+        {
+            if (!IsValidForInitialization(sourceDb, targetDb)) return true; // Already exists / excluded - nothing to do
+            if (stoppingToken.IsCancellationRequested) return true;
             try
             {
-                if (LogShipping.InitializingDBs.TryAdd(sourceDb.ToLower(), sourceDb)) // To prevent log restores until initialization is complete
-                {
-                    DoProcessDB(sourceDb, targetDb);
-                }
-                else
-                {
-                    Log.Error("{sourceDb} is already initializing", sourceDb);
-                }
+                DoProcessDB(sourceDb, targetDb);
             }
             catch (Exception ex)
             {
                 Log.Error(ex, "Error initializing new database from backup {sourceDb}", sourceDb);
             }
-            finally
+            return true;
+        }
+
+        /// <summary>
+        /// Drop and re-initialize a database whose source log chain can no longer be continued - the source database was
+        /// re-created (dropped &amp; re-created with the same name), or the log chain was otherwise broken (e.g. the recovery
+        /// model was switched to SIMPLE and back to FULL).  Returns false if the restore did not complete so it can be retried.
+        /// </summary>
+        private bool RunReInitialize(string sourceDb, string targetDb, string reason)
+        {
+            // Only drop a database that is in a RESTORING or STANDBY state.  RESTORING is sys.databases.state = 1.
+            // A database in STANDBY mode is ONLINE (state = 0) with is_in_standby = 1.
+            // This guards against dropping a regular ONLINE database (e.g. one that isn't actually log shipped).
+            const byte onlineState = 0;
+            const byte restoringState = 1;
+            var state = DataHelper.GetDatabaseState(targetDb, Config.Destination);
+            var isRestoringOrStandby = state.HasValue && (state.Value.State == restoringState || (state.Value.State == onlineState && state.Value.IsInStandby));
+            if (!isRestoringOrStandby)
             {
-                LogShipping.InitializingDBs.TryRemove(sourceDb.ToLower(), out _); // Log restores can start after restore operations have completed
+                AuditLog.Reinitialization.Error("Cannot re-initialize {targetDb}. Expected the database to be in a RESTORING or STANDBY state but sys.databases state is {state}, is_in_standby: {isInStandby}. {targetDb} has NOT been dropped.", targetDb, state?.State.ToString() ?? "not found (database does not exist)", state?.IsInStandby ?? false, targetDb);
+                return true; // Not in a droppable state - don't retry
+            }
+
+            try
+            {
+                AuditLog.Reinitialization.Warning("Dropping {targetDb} so it can be re-initialized.  Reason: {reason}", targetDb, reason);
+                LogShipping.KillUserConnections(targetDb); // Clear any open connections (e.g. STANDBY) so the drop can proceed
+                DataHelper.DropDatabase(targetDb, Config.Destination);
+                DoProcessDB(sourceDb, targetDb);
+                // DoProcessDB handles initialization errors internally (logged without throwing) - verify the database exists before reporting success
+                if (DataHelper.GetDatabaseState(targetDb, Config.Destination) == null)
+                {
+                    AuditLog.Reinitialization.Error("{targetDb} was dropped but re-initialization did NOT complete.  Check the log for initialization errors.", targetDb);
+                    return false; // Database was dropped - retry until it is restored
+                }
+                AuditLog.Reinitialization.Warning("{targetDb} has been dropped and re-initialized from a current backup.", targetDb);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AuditLog.Reinitialization.Error(ex, "Error re-initializing {targetDb}.  Reason for re-initialization: {reason}", targetDb, reason);
+                return false; // Retry
             }
         }
 
@@ -64,31 +223,52 @@ namespace LogShippingService
             }
 
             long i = 0;
-            while (!stoppingToken.IsCancellationRequested)
+            var consumers = StartInitializationConsumers(stoppingToken);
+            try
             {
-                await WaitForNextInitializationAsync(i, stoppingToken);
-                i++;
-                if (stoppingToken.IsCancellationRequested) return;
-                try
+                while (!stoppingToken.IsCancellationRequested)
                 {
-                    DestinationDBs = DatabaseInfo.GetDatabaseInfo(Config.Destination);
-                }
-                catch (Exception ex)
-                {
-                    Log.Error(ex, "Error getting destination databases.");
-                    break;
-                }
-                try
-                {
-                    using (var op = Operation.Begin($"Initialize new databases iteration {i}"))
+                    await WaitForNextInitializationAsync(i, stoppingToken);
+                    i++;
+                    if (stoppingToken.IsCancellationRequested) return;
+                    try
                     {
-                        PollForNewDBs(stoppingToken);
-                        op.Complete();
+                        DestinationDBs = DatabaseInfo.GetDatabaseInfo(Config.Destination);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Error getting destination databases.");
+                        break;
+                    }
+                    try
+                    {
+                        using (var op = Operation.Begin($"Initialize new databases iteration {i}"))
+                        {
+                            PollForNewDBs(stoppingToken);
+                            op.Complete();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Error(ex, "Error running poll for new DBs");
                     }
                 }
+            }
+            finally
+            {
+                // Stop accepting new work, then wait for consumers to finish (in-flight restores are not cancelled mid-operation).
+                _initQueue.Writer.TryComplete();
+                try
+                {
+                    await Task.WhenAll(consumers);
+                }
+                catch (OperationCanceledException)
+                {
+                    Log.Information("Initialization consumers shutdown due to cancellation request");
+                }
                 catch (Exception ex)
                 {
-                    Log.Error(ex, "Error running poll for new DBs");
+                    Log.Error(ex, "Unexpected error during initialization consumer shutdown");
                 }
             }
             Log.Information("Poll for new DBs is shutdown");

@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 // In SDK-style projects such as this one, several assembly attributes that were historically
@@ -24,3 +25,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 [assembly: AssemblyVersion("2.2.0")]
+
+// Expose internal members to the unit test project (used to test pure decision logic such as
+// LogShipping.GetLogChainStatus without requiring a SQL Server instance).
+[assembly: InternalsVisibleTo("LogShippingServiceTests")]

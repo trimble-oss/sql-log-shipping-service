@@ -64,6 +64,9 @@ namespace LogShippingService
         [Option("InitializeSimple", Required = false, HelpText = @"Databases in SIMPLE recovery model are excluded by default.")]
         public bool? InitializeSimple { get; set; }
 
+        [Option("EnableReinitialization", Required = false, HelpText = @"Automatically drop & re-initialize a log-shipped database when its log chain can no longer be continued - i.e. the source database was dropped & re-created with the same name, or the log chain was otherwise broken (e.g. recovery model switched to SIMPLE and back to FULL).  Default false as it drops the destination database.")]
+        public bool? EnableReinitialization { get; set; }
+
         [Option("IncludedDatabases", Required = false, HelpText = @"List of databases to include.  All other databases are excluded. e.g. --IncludedDatabases ""DB1"" ""DB2""")]
         public IEnumerable<string>? IncludedDatabases { get; set; }
 
@@ -96,6 +99,9 @@ namespace LogShippingService
 
         [Option("MaxThreads", Required = false, HelpText = @"Max number of threads to use for restore operations.")]
         public int? MaxThreads { get; set; }
+
+        [Option("MaxConcurrentInitializations", Required = false, HelpText = @"Max number of databases that can be (re)initialized from a FULL backup concurrently.  Defaults to MaxThreads.")]
+        public int? MaxConcurrentInitializations { get; set; }
 
         [Option("Hours", Required = false, HelpText = @"Hours that log restores are allowed to run. Set to -1 to include ALL hours (default).  e.g. --Hours 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23")]
         public IEnumerable<int>? Hours { get; set; }

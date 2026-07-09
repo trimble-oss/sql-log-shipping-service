@@ -159,5 +159,46 @@ namespace LogShippingService
             cn.Open();
             return BigInteger.Parse(cmd.ExecuteScalar().ToString() ?? throw new InvalidOperationException());
         }
+
+        /// <summary>
+        /// Get the state of a database from sys.databases.  Returns null if the database does not exist.
+        /// A log shipped database is either RESTORING (state = 1) or in STANDBY mode.
+        /// A database in STANDBY mode is ONLINE (state = 0) with is_in_standby = 1.
+        /// </summary>
+        public static (byte State, bool IsInStandby)? GetDatabaseState(string db, string connectionString)
+        {
+            using var cn = new SqlConnection(connectionString);
+            using var cmd = new SqlCommand("SELECT state, is_in_standby FROM sys.databases WHERE database_id = DB_ID(@db)", cn) { CommandTimeout = 0 };
+            cmd.Parameters.AddWithValue("@db", db);
+            cn.Open();
+            using var rdr = cmd.ExecuteReader();
+            if (!rdr.Read())
+            {
+                return null;
+            }
+            var state = Convert.ToByte(rdr["state"]);
+            var isInStandby = rdr["is_in_standby"] != DBNull.Value && Convert.ToBoolean(rdr["is_in_standby"]);
+            return (state, isInStandby);
+        }
+
+        /// <summary>
+        /// Drop a database that is in a RESTORING or STANDBY state.  RESTORING is sys.databases.state = 1; a database in STANDBY
+        /// mode is ONLINE (state = 0) with is_in_standby = 1.  An ONLINE database that is not in standby is never dropped -
+        /// an error is raised instead so callers do not silently continue.  Any open connections (e.g. for databases in STANDBY
+        /// mode) should be cleared first via LogShipping.KillUserConnections.
+        /// </summary>
+        public static void DropDatabase(string db, string connectionString)
+        {
+            var quoted = db.SqlQuote();
+            var literal = db.SqlSingleQuote();
+            var sql = $@"IF DB_ID({literal}) IS NOT NULL
+BEGIN
+    IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID({literal}) AND (state = 1 /* RESTORING */ OR (state = 0 AND is_in_standby = 1) /* STANDBY */))
+        DROP DATABASE {quoted};
+    ELSE
+        RAISERROR('Refusing to drop %s - it is not in a RESTORING or STANDBY state.', 16, 1, {literal});
+END";
+            ExecuteWithTiming(sql, connectionString);
+        }
     }
 }

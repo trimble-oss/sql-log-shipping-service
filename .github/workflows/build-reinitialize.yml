@@ -1,0 +1,352 @@
+name: SQL Log Shipping Service - Re-initialize
+
+on:
+    push:
+    workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reinitialize-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & Test Re-initialize
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build solution
+        run: dotnet build sql-log-shipping-service\LogShippingService.csproj -p:Configuration=Release -o Build
+
+      - name: Install SQL
+        uses: potatoqualitee/mssqlsuite@v1.12
+        with:
+          install: sqlengine
+          collation: Latin1_General_BIN
+
+      - name: Check SQL Install
+        run: |
+          sqlcmd -S localhost -U sa -P dbatools.I0 -d tempdb -Q "SELECT @@version as Version;"
+          sqlcmd -S localhost -U sa -P dbatools.I0 -d tempdb -Q "SELECT SERVERPROPERTY('Collation') AS Collation;"
+
+      - name: DBATools
+        run: |
+          Install-Module dbatools -Force
+          Set-DbatoolsConfig -FullName sql.connection.trustcert -Value $true -Register
+
+      - name: Create Databases (initial state)
+        run: |
+          # ReInit1 - source will be dropped & re-created (new incarnation)
+          # ReInit2 - source recovery model will be switched to SIMPLE and back to FULL (broken log chain)
+          # ReInit3 - source continues normally and must NOT be re-initialized
+          # Source databases stay online.  A copy of each is log shipped using the _Copy suffix.
+          New-DbaDatabase -SqlInstance localhost -Name ReInit1,ReInit2,ReInit3 -RecoveryModel FULL
+          foreach($db in 'ReInit1','ReInit2','ReInit3') {
+            Invoke-DbaQuery -SqlInstance localhost -Database $db -Query "CREATE TABLE dbo.Marker(Id INT NOT NULL); INSERT INTO dbo.Marker(Id) VALUES(1);"
+          }
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\FULL\ -Database ReInit1,ReInit2,ReInit3 -Type Full -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database ReInit1,ReInit2,ReInit3 -Type LOG -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+          Get-DbaDatabase -SqlInstance localhost -ExcludeSystem | Select-Object {$_.Name}
+
+      - name: Deploy App
+        run: |
+          New-Item -Path C:\sql-log-shipping-service -ItemType Directory
+          New-Item -Path C:\Standby -ItemType Directory
+          Copy-Item -Path .\Build\* -Destination C:\sql-log-shipping-service -Recurse
+
+      - name: Configure
+        shell: cmd
+        run: |
+          "C:\sql-log-shipping-service\LogShippingService.exe" --Destination "Data Source=LOCALHOST;Integrated Security=True;Encrypt=True;Trust Server Certificate=True" --LogFilePath "C:\Backup\LOG\{DatabaseName}" --FullFilePath "C:\Backup\FULL\{DatabaseName}" --StandbyFileName "C:\Standby\{DatabaseName}_Standby.BAK" --RestoreDatabaseNameSuffix "_Copy" --EnableReinitialization true --DelayBetweenIterationsMs 5000
+
+      - name: Run service
+        run: |
+          sc.exe create "LogShippingService" binpath="C:\sql-log-shipping-service\LogShippingService.exe"
+          net start LogShippingService
+
+      - name: Wait for initial standby
+        run: |
+          $targets = 'ReInit1_Copy','ReInit2_Copy','ReInit3_Copy'
+          $LoopCount=0; $MaxLoopCount=60; $ready=$false
+          while(-not $ready -and $LoopCount -lt $MaxLoopCount) {
+            Start-Sleep -s 2; $LoopCount++
+            $ok=0
+            foreach($t in $targets) {
+              try {
+                if(Get-DbaDatabase -SqlInstance localhost -Database $t -Status Standby) {
+                  $res = Invoke-DbaQuery -SqlInstance localhost -Database $t -As PSObject -Query "SELECT MAX(Id) AS Id FROM dbo.Marker"
+                  if($res.Id -eq 1) { $ok++ }
+                }
+              } catch { }
+            }
+            if($ok -eq $targets.Count) { $ready=$true }
+            Write-Output "Waiting for initial standby ($ok/$($targets.Count))..."
+          }
+          if(-not $ready) {
+            Get-ChildItem -Path C:\sql-log-shipping-service\Logs | Get-Content
+            throw "Timeout waiting for initial standby"
+          }
+          Write-Output "All copies initialized (marker = 1)."
+
+      - name: Apply scenarios
+        run: |
+          # ReInit1: drop & re-create the source with the same name - a new database incarnation
+          Remove-DbaDatabase -SqlInstance localhost -Database ReInit1 -Confirm:$false
+          New-DbaDatabase -SqlInstance localhost -Name ReInit1 -RecoveryModel FULL
+          Invoke-DbaQuery -SqlInstance localhost -Database ReInit1 -Query "CREATE TABLE dbo.Marker(Id INT NOT NULL); INSERT INTO dbo.Marker(Id) VALUES(2);"
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\FULL\ -Database ReInit1 -Type Full -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database ReInit1 -Type LOG -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+
+          # ReInit2: switch recovery model to SIMPLE and back to FULL - breaks the log chain.
+          # A new FULL backup establishes the new chain; the following LOG backup begins it (BeginsLogChain).
+          Set-DbaDbRecoveryModel -SqlInstance localhost -Database ReInit2 -RecoveryModel Simple -Confirm:$false
+          Set-DbaDbRecoveryModel -SqlInstance localhost -Database ReInit2 -RecoveryModel Full -Confirm:$false
+          Invoke-DbaQuery -SqlInstance localhost -Database ReInit2 -Query "INSERT INTO dbo.Marker(Id) VALUES(2);"
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\FULL\ -Database ReInit2 -Type Full -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database ReInit2 -Type LOG -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+
+          # ReInit3: normal continuation of the same log chain - must NOT be re-initialized.
+          # No new FULL backup, just another LOG backup that should be applied normally.
+          Invoke-DbaQuery -SqlInstance localhost -Database ReInit3 -Query "INSERT INTO dbo.Marker(Id) VALUES(2);"
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database ReInit3 -Type LOG -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+
+      - name: Wait for scenarios to be applied
+        run: |
+          $targets = 'ReInit1_Copy','ReInit2_Copy','ReInit3_Copy'
+          $LoopCount=0; $MaxLoopCount=120; $ready=$false
+          while(-not $ready -and $LoopCount -lt $MaxLoopCount) {
+            Start-Sleep -s 2; $LoopCount++
+            $ok=0
+            foreach($t in $targets) {
+              try {
+                if(Get-DbaDatabase -SqlInstance localhost -Database $t -Status Standby) {
+                  $res = Invoke-DbaQuery -SqlInstance localhost -Database $t -As PSObject -Query "SELECT MAX(Id) AS Id FROM dbo.Marker"
+                  if($res.Id -eq 2) { $ok++ }
+                }
+              } catch { }
+            }
+            if($ok -eq $targets.Count) { $ready=$true }
+            Write-Output "Waiting for scenarios to be applied ($ok/$($targets.Count))..."
+          }
+          if(-not $ready) {
+            Get-ChildItem -Path C:\sql-log-shipping-service\Logs | Get-Content
+            throw "Timeout waiting for scenarios to be applied"
+          }
+          Write-Output "All copies now reflect marker = 2."
+
+      - name: Verify no further re-initialization (idempotency)
+        run: |
+          # Re-initialization must be one-shot.  Capture the full-restore counts, wait a couple of poll
+          # cycles, then confirm they have not increased (i.e. we are not stuck re-initializing in a loop).
+          function Get-FullRestoreCounts {
+            $counts = @{}
+            foreach($db in 'ReInit1_Copy','ReInit2_Copy','ReInit3_Copy') {
+              $counts[$db] = (Invoke-DbaQuery -SqlInstance localhost -As PSObject -Query "SELECT COUNT(*) AS C FROM msdb.dbo.restorehistory WHERE destination_database_name='$db' AND restore_type='D';").C
+            }
+            return $counts
+          }
+          $before = Get-FullRestoreCounts
+          Write-Output "Full-restore counts before wait: $($before | Out-String)"
+          Start-Sleep -s 15
+          $after = Get-FullRestoreCounts
+          Write-Output "Full-restore counts after wait: $($after | Out-String)"
+          foreach($db in $after.Keys) {
+            if($after[$db] -ne $before[$db]) {
+              Get-ChildItem -Path C:\sql-log-shipping-service\Logs | Get-Content
+              throw "Re-initialization is not idempotent for $db (full restores went from $($before[$db]) to $($after[$db]))"
+            }
+          }
+          Write-Output "No further re-initialization detected - re-initialization is one-shot."
+
+      - name: Output Logs
+        if: always()
+        run: |
+          Get-ChildItem -Path C:\sql-log-shipping-service\Logs | Get-Content
+
+      - name: Run Pester Tests for Re-initialize
+        run: |
+          Install-Module Pester -Force -SkipPublisherCheck
+          Import-Module Pester
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'test\CI_Workflow-Reinitialize.Tests.ps1'
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputFormat = 'NUnitXml'
+          $config.TestResult.OutputPath = 'test-results\reinitialize.xml'
+          $config.Run.PassThru = $true
+          $result = Invoke-Pester -Configuration $config
+          if ($result.FailedCount -gt 0) {
+            throw "$($result.FailedCount) Pester test(s) failed"
+          }
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          New-Item -Path diagnostics\Logs -ItemType Directory -Force | Out-Null
+          Copy-Item -Path C:\sql-log-shipping-service\Logs\* -Destination diagnostics\Logs -Recurse -ErrorAction SilentlyContinue
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: reinitialize-diagnostics
+          path: |
+            diagnostics\**\*
+            test-results\**\*
+          if-no-files-found: ignore
+
+  build-noreinit:
+    name: Build & Test No-Reinitialize (safety)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Setup
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build solution
+        run: dotnet build sql-log-shipping-service\LogShippingService.csproj -p:Configuration=Release -o Build
+
+      - name: Install SQL
+        uses: potatoqualitee/mssqlsuite@v1.12
+        with:
+          install: sqlengine
+          collation: Latin1_General_BIN
+
+      - name: DBATools
+        run: |
+          Install-Module dbatools -Force
+          Set-DbatoolsConfig -FullName sql.connection.trustcert -Value $true -Register
+
+      - name: Create Databases (initial state)
+        run: |
+          # Only the broken-chain scenarios are needed for the negative test.
+          # ReInit1 - source will be dropped & re-created (new incarnation)
+          # ReInit2 - source recovery model switched to SIMPLE and back to FULL (broken log chain)
+          New-DbaDatabase -SqlInstance localhost -Name ReInit1,ReInit2 -RecoveryModel FULL
+          foreach($db in 'ReInit1','ReInit2') {
+            Invoke-DbaQuery -SqlInstance localhost -Database $db -Query "CREATE TABLE dbo.Marker(Id INT NOT NULL); INSERT INTO dbo.Marker(Id) VALUES(1);"
+          }
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\FULL\ -Database ReInit1,ReInit2 -Type Full -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database ReInit1,ReInit2 -Type LOG -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+
+      - name: Deploy App
+        run: |
+          New-Item -Path C:\sql-log-shipping-service -ItemType Directory
+          New-Item -Path C:\Standby -ItemType Directory
+          Copy-Item -Path .\Build\* -Destination C:\sql-log-shipping-service -Recurse
+
+      - name: Configure (re-initialization disabled)
+        shell: cmd
+        run: |
+          "C:\sql-log-shipping-service\LogShippingService.exe" --Destination "Data Source=LOCALHOST;Integrated Security=True;Encrypt=True;Trust Server Certificate=True" --LogFilePath "C:\Backup\LOG\{DatabaseName}" --FullFilePath "C:\Backup\FULL\{DatabaseName}" --StandbyFileName "C:\Standby\{DatabaseName}_Standby.BAK" --RestoreDatabaseNameSuffix "_Copy" --EnableReinitialization false --DelayBetweenIterationsMs 5000
+
+      - name: Run service
+        run: |
+          sc.exe create "LogShippingService" binpath="C:\sql-log-shipping-service\LogShippingService.exe"
+          net start LogShippingService
+
+      - name: Wait for initial standby
+        run: |
+          $targets = 'ReInit1_Copy','ReInit2_Copy'
+          $LoopCount=0; $MaxLoopCount=60; $ready=$false
+          while(-not $ready -and $LoopCount -lt $MaxLoopCount) {
+            Start-Sleep -s 2; $LoopCount++
+            $ok=0
+            foreach($t in $targets) {
+              try {
+                if(Get-DbaDatabase -SqlInstance localhost -Database $t -Status Standby) {
+                  $res = Invoke-DbaQuery -SqlInstance localhost -Database $t -As PSObject -Query "SELECT MAX(Id) AS Id FROM dbo.Marker"
+                  if($res.Id -eq 1) { $ok++ }
+                }
+              } catch { }
+            }
+            if($ok -eq $targets.Count) { $ready=$true }
+            Write-Output "Waiting for initial standby ($ok/$($targets.Count))..."
+          }
+          if(-not $ready) {
+            Get-ChildItem -Path C:\sql-log-shipping-service\Logs | Get-Content
+            throw "Timeout waiting for initial standby"
+          }
+          Write-Output "All copies initialized (marker = 1)."
+
+      - name: Apply broken-chain scenarios
+        run: |
+          # ReInit1: drop & re-create the source (new incarnation).
+          Remove-DbaDatabase -SqlInstance localhost -Database ReInit1 -Confirm:$false
+          New-DbaDatabase -SqlInstance localhost -Name ReInit1 -RecoveryModel FULL
+          Invoke-DbaQuery -SqlInstance localhost -Database ReInit1 -Query "CREATE TABLE dbo.Marker(Id INT NOT NULL); INSERT INTO dbo.Marker(Id) VALUES(2);"
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\FULL\ -Database ReInit1 -Type Full -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database ReInit1 -Type LOG -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+
+          # ReInit2: switch recovery model to SIMPLE and back to FULL - breaks the log chain.
+          Set-DbaDbRecoveryModel -SqlInstance localhost -Database ReInit2 -RecoveryModel Simple -Confirm:$false
+          Set-DbaDbRecoveryModel -SqlInstance localhost -Database ReInit2 -RecoveryModel Full -Confirm:$false
+          Invoke-DbaQuery -SqlInstance localhost -Database ReInit2 -Query "INSERT INTO dbo.Marker(Id) VALUES(2);"
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\FULL\ -Database ReInit2 -Type Full -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+          Backup-DbaDatabase -SqlInstance localhost -Path C:\backup\LOG\ -Database ReInit2 -Type LOG -CreateFolder -TimeStampFormat yyyyMMddHHmmss
+
+      - name: Give the service time to (not) act
+        run: |
+          # With re-initialization disabled the service should keep failing to restore the broken chains.
+          # Wait a few poll cycles so any (incorrect) re-initialization would have had time to occur.
+          Start-Sleep -s 30
+
+      - name: Output Logs
+        if: always()
+        run: |
+          Get-ChildItem -Path C:\sql-log-shipping-service\Logs | Get-Content
+
+      - name: Run Pester Tests for No-Reinitialize
+        run: |
+          Install-Module Pester -Force -SkipPublisherCheck
+          Import-Module Pester
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'test\CI_Workflow-NoReinit.Tests.ps1'
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputFormat = 'NUnitXml'
+          $config.TestResult.OutputPath = 'test-results\noreinit.xml'
+          $config.Run.PassThru = $true
+          $result = Invoke-Pester -Configuration $config
+          if ($result.FailedCount -gt 0) {
+            throw "$($result.FailedCount) Pester test(s) failed"
+          }
+
+      - name: Collect diagnostics
+        if: always()
+        run: |
+          New-Item -Path diagnostics\Logs -ItemType Directory -Force | Out-Null
+          Copy-Item -Path C:\sql-log-shipping-service\Logs\* -Destination diagnostics\Logs -Recurse -ErrorAction SilentlyContinue
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: noreinitialize-diagnostics
+          path: |
+            diagnostics\**\*
+            test-results\**\*
+          if-no-files-found: ignore
+
+

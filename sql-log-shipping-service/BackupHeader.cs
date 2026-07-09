@@ -144,6 +144,11 @@ namespace LogShippingService
             SetFromRow(row);
         }
 
+        /// <summary>Parameterless constructor used by unit tests to build headers with specific values.</summary>
+        internal BackupHeader()
+        {
+        }
+
         private void SetFromRow(DataRow row)
         {
             BackupName = row["BackupName"] as string;

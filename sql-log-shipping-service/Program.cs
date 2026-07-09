@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Serilog;
+using Serilog.Filters;
 
 namespace LogShippingService
 {
@@ -59,14 +60,15 @@ namespace LogShippingService
             if (configuration != null && serilogSection.Exists() && serilogSection.GetChildren().Any())
             {
                 // Configure Serilog from the configuration file
-                Log.Logger = new LoggerConfiguration()
-                    .ReadFrom.Configuration(configuration)
-                    .CreateLogger();
+                var loggerConfiguration = new LoggerConfiguration()
+                    .ReadFrom.Configuration(configuration);
+                AddReinitializationLog(loggerConfiguration);
+                Log.Logger = loggerConfiguration.CreateLogger();
             }
             else
             {
                 // Configure Serilog with default settings programmatically
-                Log.Logger = new LoggerConfiguration()
+                var loggerConfiguration = new LoggerConfiguration()
                     .MinimumLevel.Debug()
                     .WriteTo.Console(outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj} <{ThreadId}>{NewLine}{Exception}")
                     .WriteTo.File(path: "Logs/log-.txt",
@@ -76,9 +78,24 @@ namespace LogShippingService
                     .Enrich.FromLogContext()
                     .Enrich.WithMachineName()
                     .Enrich.WithThreadId()
-                    .Enrich.WithProperty("Application", "LogShippingService")
-                    .CreateLogger();
+                    .Enrich.WithProperty("Application", "LogShippingService");
+                AddReinitializationLog(loggerConfiguration);
+                Log.Logger = loggerConfiguration.CreateLogger();
             }
+        }
+
+        /// <summary>
+        /// Write database re-initialization events (tagged via <see cref="AuditLog.ReinitializationProperty"/>) to a dedicated log
+        /// file, in addition to the main log.  These events are rare but significant (a database is dropped &amp; rebuilt) so a
+        /// separate, easy to find record is kept.
+        /// </summary>
+        private static void AddReinitializationLog(LoggerConfiguration loggerConfiguration)
+        {
+            loggerConfiguration.WriteTo.Logger(reinitLog => reinitLog
+                .Filter.ByIncludingOnly(Matching.WithProperty<bool>(AuditLog.ReinitializationProperty, isReinit => isReinit))
+                .WriteTo.File(path: "Logs/reinitialization-.txt",
+                    rollingInterval: RollingInterval.Month,
+                    outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj} <{ThreadId}>{NewLine}{Exception}"));
         }
     }
 }

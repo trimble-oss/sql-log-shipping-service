@@ -1,4 +1,4 @@
-name: SQL Log Shipping Service - Restore Copy
+name: SQL Log Shipping Service - Restore with rename & multiple paths
 
 on: 
     push:
@@ -8,6 +8,9 @@ jobs:
   build:
     name: Build & Test
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
 
     steps:
       - name: Checkout repository

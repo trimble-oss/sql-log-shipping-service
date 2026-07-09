@@ -362,6 +362,10 @@ namespace LogShippingService
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         public bool InitializeSimple { get; set; }
 
+        /// <summary>Option to automatically drop and re-initialize a log-shipped database when its log chain can no longer be continued.  This happens when the source database is dropped and re-created with the same name, or when the log chain is otherwise broken (e.g. the recovery model is switched to SIMPLE and back to FULL).  Detected via a newer DatabaseCreationDate or a new log chain (BeginsLogChain).  Default false as it involves dropping the destination database.</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public bool EnableReinitialization { get; set; }
+
         /// <summary>Max age of backups to use for initialization in days.  Defaults to 14 days. Prevents old backups been used to initialize. </summary>
         public int MaxBackupAgeForInitialization { get; set; } = MaxBackupAgeForInitializationDefault;
 
@@ -432,6 +436,16 @@ namespace LogShippingService
         /// <summary>Max number of threads to use for log restores and database initialization (each can use up to MaxThreads)</summary>
         public int MaxThreads { get; set; } = MaxThreadsDefault;
 
+        private int? _maxConcurrentInitializations;
+
+        /// <summary>Max number of databases that can be (re)initialized from a FULL backup concurrently.  Initialization and re-initialization share this limit as both perform a FULL restore.  Defaults to MaxThreads.</summary>
+        [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
+        public int MaxConcurrentInitializations
+        {
+            get => _maxConcurrentInitializations ?? MaxThreads;
+            set => _maxConcurrentInitializations = value;
+        }
+
         [JsonProperty(DefaultValueHandling = DefaultValueHandling.Ignore)]
         public int RestoreDelayMins { get; set; }
 
@@ -475,6 +489,11 @@ namespace LogShippingService
         public bool ShouldSerializeMaxThreads()
         {
             return MaxThreads != MaxThreadsDefault;
+        }
+
+        public bool ShouldSerializeMaxConcurrentInitializations()
+        {
+            return _maxConcurrentInitializations.HasValue;
         }
 
         public bool ShouldSerializeMaxProcessingTimeMins()
@@ -627,6 +646,11 @@ namespace LogShippingService
                                 InitializeSimple = (bool)opts.InitializeSimple;
                             }
 
+                            if (opts.EnableReinitialization != null)
+                            {
+                                EnableReinitialization = (bool)opts.EnableReinitialization;
+                            }
+
                             if (opts.IncludedDatabases != null && args.Contains("--IncludedDatabases"))
                             {
                                 IncludedDatabases = opts.IncludedDatabases.Where(dbs => !string.IsNullOrEmpty(dbs))
@@ -683,6 +707,11 @@ namespace LogShippingService
                             if (opts.MaxThreads != null)
                             {
                                 MaxThreads = (int)opts.MaxThreads;
+                            }
+
+                            if (opts.MaxConcurrentInitializations != null)
+                            {
+                                MaxConcurrentInitializations = (int)opts.MaxConcurrentInitializations;
                             }
 
                             if (opts.ContainerUrl != null)

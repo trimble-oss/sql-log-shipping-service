@@ -52,12 +52,11 @@ namespace LogShippingService
             }
 
             Log.Information("NewDBs:{Count}", newDBs.Count);
-            Parallel.ForEach(newDBs.AsEnumerable(),
-                new ParallelOptions() { MaxDegreeOfParallelism = Config.MaxThreads },
-                newDb =>
-                {
-                    ProcessDB(newDb.Name, stoppingToken);
-                });
+            foreach (var newDb in newDBs)
+            {
+                if (stoppingToken.IsCancellationRequested) break;
+                EnqueueInitialization(newDb.Name, GetDestinationDatabaseName(newDb.Name), InitReason.NewDatabase, null);
+            }
         }
 
         /// <summary>

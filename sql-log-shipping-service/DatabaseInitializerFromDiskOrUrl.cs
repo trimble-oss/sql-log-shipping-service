@@ -31,17 +31,11 @@ namespace LogShippingService
         {
             if (string.IsNullOrEmpty(Config.FullFilePath)) return;
 
-            Parallel.ForEach(FileHandler.FileHandlerInstance.GetDatabases(),
-                new ParallelOptions { MaxDegreeOfParallelism = Config.MaxThreads },
-                (database, state) =>
-                {
-                    if (stoppingToken.IsCancellationRequested)
-                    {
-                        state.Stop(); // Stop the loop if cancellation is requested
-                    }
-
-                    ProcessDB(database, stoppingToken);
-                });
+            foreach (var database in FileHandler.FileHandlerInstance.GetDatabases())
+            {
+                if (stoppingToken.IsCancellationRequested) break;
+                EnqueueInitialization(database, GetDestinationDatabaseName(database), InitReason.NewDatabase, null);
+            }
         }
 
         protected override void DoProcessDB(string sourceDb, string targetDb)
