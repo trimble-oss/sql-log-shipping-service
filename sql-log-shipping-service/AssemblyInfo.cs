@@ -24,7 +24,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("Copyright © 2022 Trimble, Inc.")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
-[assembly: AssemblyVersion("2.2.0")]
+[assembly: AssemblyVersion("2.3.0")]
 
 // Expose internal members to the unit test project (used to test pure decision logic such as
 // LogShipping.GetLogChainStatus without requiring a SQL Server instance).
