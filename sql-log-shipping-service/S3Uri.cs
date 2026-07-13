@@ -22,7 +22,11 @@ namespace LogShippingService
             Uri = new Uri(s3Uri);
             RegionSystemName = ExtractRegionFromHost(Uri.Host);
             Bucket = Uri.Host.Split('.')[0];
-            Key = Uri.AbsolutePath.TrimStart('/');
+            // Use the unescaped path so special characters in the key (e.g. curly braces in
+            // database names) are not percent-encoded.  AbsolutePath would encode '{' as %7B,
+            // '}' as %7D etc., which then wouldn't match the literal S3 object keys when used
+            // as a ListObjects prefix.
+            Key = Uri.GetComponents(UriComponents.Path, UriFormat.Unescaped).TrimStart('/');
         }
 
         private string ExtractRegionFromHost(string host)

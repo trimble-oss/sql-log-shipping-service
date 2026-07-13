@@ -2,7 +2,6 @@
 using Amazon.S3.Model;
 using Amazon.S3;
 using Amazon;
-using System.Web;
 using Serilog;
 
 namespace LogShippingService.FileHandling
@@ -25,7 +24,9 @@ namespace LogShippingService.FileHandling
             var dbRootList = s3Paths.Select(s3Path =>
             {
                 var s3Uri = new S3Uri(s3Path.Trim());
-                var key = s3Uri.Key[..s3Uri.Key.IndexOf(HttpUtility.UrlEncode(Config.DatabaseToken), StringComparison.OrdinalIgnoreCase)];
+                // s3Uri.Key is now unescaped, so match against the raw token (which itself
+                // contains curly braces) rather than a URL-encoded version.
+                var key = s3Uri.Key[..s3Uri.Key.IndexOf(Config.DatabaseToken, StringComparison.OrdinalIgnoreCase)];
                 return $"s3://{s3Uri.Uri.Host}/{key}";
             }).ToList();
 
