@@ -25,7 +25,7 @@ jobs:
         run: dotnet build sql-log-shipping-service\LogShippingService.csproj -p:Configuration=Release -o Build
 
       - name: Install SQL
-        uses: potatoqualitee/mssqlsuite@v1.12
+        uses: potatoqualitee/mssqlsuite@v2
         with:
           install: sqlengine
           collation: Latin1_General_BIN
